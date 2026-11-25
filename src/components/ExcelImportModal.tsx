@@ -263,7 +263,7 @@ function stripViAccents(val: unknown): string {
     .toLowerCase();
 }
 
-function formatExcelDate(val: unknown): string {
+function formatExcelDate(val: unknown, preferMonthFirst = false): string {
   if (val === null || val === undefined || val === '') return '';
   if (typeof val === 'number') {
     const parsed = XLSX.SSF.parse_date_code(val);
@@ -291,10 +291,21 @@ function formatExcelDate(val: unknown): string {
   if (isoMatch) {
     return `${isoMatch[3].padStart(2, '0')}/${isoMatch[2].padStart(2, '0')}/${isoMatch[1]}`;
   }
-  // Normalize D/M/YYYY to DD/MM/YYYY
+  // Normalize D/M/YYYY (hoặc M/D/YYYY khi preferMonthFirst = true) sang DD/MM/YYYY
   const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
   if (dmyMatch) {
+    const p1 = parseInt(dmyMatch[1], 10);
+    const p2 = parseInt(dmyMatch[2], 10);
     const yearStr = dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3];
+    if (preferMonthFirst) {
+      if (p1 >= 1 && p1 <= 12 && p2 >= 1 && p2 <= 31) {
+        return `${String(p2).padStart(2, '0')}/${String(p1).padStart(2, '0')}/${yearStr}`;
+      }
+      return `${String(p1).padStart(2, '0')}/${String(p2).padStart(2, '0')}/${yearStr}`;
+    }
+    if (p2 > 12 && p1 >= 1 && p1 <= 12) {
+      return `${String(p2).padStart(2, '0')}/${String(p1).padStart(2, '0')}/${yearStr}`;
+    }
     return `${dmyMatch[1].padStart(2, '0')}/${dmyMatch[2].padStart(2, '0')}/${yearStr}`;
   }
   return str;
@@ -314,24 +325,56 @@ function readCellText(worksheet: XLSX.WorkSheet, r: number, c: number): string {
   return '';
 }
 
-function readCellDate(worksheet: XLSX.WorkSheet, r: number, c: number): string {
+function readCellDate(
+  worksheet: XLSX.WorkSheet,
+  r: number,
+  c: number,
+  preferMonthFirst = false
+): string {
   if (c < 0 || r < 0) return '';
   const addr = XLSX.utils.encode_cell({ r, c });
   const cell = worksheet[addr] as XLSX.CellObject | undefined;
   if (!cell || cell.t === 'e' || cell.t === 'z') return '';
   if (cell.t === 'n' && typeof cell.v === 'number') {
-    return formatExcelDate(cell.v);
+    return formatExcelDate(cell.v, preferMonthFirst);
   }
   if (cell.t === 'd' && cell.v instanceof Date) {
-    return formatExcelDate(cell.v);
+    return formatExcelDate(cell.v, preferMonthFirst);
   }
   if (cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') {
-    return formatExcelDate(cell.v);
+    return formatExcelDate(cell.v, preferMonthFirst);
   }
   if (cell.w !== undefined && String(cell.w).trim() !== '') {
-    return formatExcelDate(cell.w);
+    return formatExcelDate(cell.w, preferMonthFirst);
   }
   return '';
+}
+
+function detectColumnMonthFirst(
+  worksheet: XLSX.WorkSheet,
+  startRow: number,
+  endRow: number,
+  c: number,
+  defaultMonthFirst = true
+): boolean {
+  if (c < 0) return defaultMonthFirst;
+  let hasP1Gt12 = false;
+  let hasP2Gt12 = false;
+  for (let r = startRow; r <= endRow; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const cell = worksheet[addr] as XLSX.CellObject | undefined;
+    if (!cell || cell.t === 'e' || cell.t === 'z' || cell.t === 'n' || cell.t === 'd') continue;
+    const raw = cell.v !== undefined && cell.v !== null ? cleanUnicodeStr(cell.v) : '';
+    const match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+    if (!match) continue;
+    const p1 = parseInt(match[1], 10);
+    const p2 = parseInt(match[2], 10);
+    if (p1 > 12) hasP1Gt12 = true;
+    if (p2 > 12) hasP2Gt12 = true;
+  }
+  if (hasP2Gt12) return true;
+  if (hasP1Gt12) return false;
+  return defaultMonthFirst;
 }
 
 function getFormattedStringTime(): string {
@@ -1224,6 +1267,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     let emptyStreak = 0;
     const maxRow = Math.min(range.e.r, 20000);
 
+    // Cột AU (Từ ngày) & AV (Đến ngày) có thể đang format mm/dd/yyyy -> mặc định ưu tiên đọc MM/DD/YYYY (trừ khi cột có ngày > 12 ở vị trí đầu)
+    const tuNgayMonthFirst = detectColumnMonthFirst(worksheet, dataStartRow, maxRow, colTuNgay, true);
+    const denNgayMonthFirst = detectColumnMonthFirst(worksheet, dataStartRow, maxRow, colDenNgay, true);
+
     for (let r = dataStartRow; r <= maxRow; r++) {
       const sttVal = colStt >= 0 ? readCellText(worksheet, r, colStt) : '';
       const msnvVal = colMsnv >= 0 ? readCellText(worksheet, r, colMsnv) : '';
@@ -1354,8 +1401,8 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
         thoiHan: colThoiHan >= 0 ? readCellText(worksheet, r, colThoiHan) : '',
         phanLoai: colPhanLoai >= 0 ? readCellText(worksheet, r, colPhanLoai) : '',
         soHd: colSoHd >= 0 ? readCellText(worksheet, r, colSoHd) : '',
-        tuNgay: colTuNgay >= 0 ? readCellDate(worksheet, r, colTuNgay) : '',
-        denNgay: colDenNgay >= 0 ? readCellDate(worksheet, r, colDenNgay) : '',
+        tuNgay: colTuNgay >= 0 ? readCellDate(worksheet, r, colTuNgay, tuNgayMonthFirst) : '',
+        denNgay: colDenNgay >= 0 ? readCellDate(worksheet, r, colDenNgay, denNgayMonthFirst) : '',
         khoi2: colKhoi2 >= 0 ? readCellText(worksheet, r, colKhoi2) : '',
         chucVu: colChucVu >= 0 ? readCellText(worksheet, r, colChucVu) : '',
         extraData: {},

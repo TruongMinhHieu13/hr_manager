@@ -81,6 +81,7 @@ export const RenewContractModal: React.FC<RenewContractModalProps> = ({
   // Validation errors
   const [errors, setErrors] = useState<{
     contractType?: string;
+    contractNumber?: string;
     startDate?: string;
     endDate?: string;
     general?: string;
@@ -253,12 +254,17 @@ export const RenewContractModal: React.FC<RenewContractModalProps> = ({
   const validateForm = (): boolean => {
     const newErrors: {
       contractType?: string;
+      contractNumber?: string;
       startDate?: string;
       endDate?: string;
     } = {};
 
     if (!selectedContractTypeId) {
       newErrors.contractType = 'Vui lòng chọn Loại HĐLĐ mới.';
+    }
+
+    if (!contractNumberStr.trim()) {
+      newErrors.contractNumber = 'Vui lòng nhập Số hợp đồng mới.';
     }
 
     if (!startDateStr.trim()) {
@@ -341,7 +347,12 @@ export const RenewContractModal: React.FC<RenewContractModalProps> = ({
       setShowPrintConfirmDialog(true);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Có lỗi xảy ra khi tái ký hợp đồng';
-      setErrors((prev) => ({ ...prev, general: msg }));
+      const isContractNumErr = msg.toLowerCase().includes('số hợp đồng');
+      setErrors((prev) => ({
+        ...prev,
+        general: msg,
+        ...(isContractNumErr ? { contractNumber: msg } : {}),
+      }));
       if (onShowToast) {
         onShowToast(msg, 'error');
       }
@@ -532,12 +543,20 @@ export const RenewContractModal: React.FC<RenewContractModalProps> = ({
                     <input
                       type="text"
                       value={contractNumberStr}
-                      onChange={(e) => setContractNumberStr(e.target.value)}
+                      onChange={(e) => {
+                        setContractNumberStr(e.target.value);
+                        setErrors((prev) => ({ ...prev, contractNumber: undefined, general: undefined }));
+                      }}
                       placeholder="Ví dụ: 1080"
                       disabled={isSubmitting}
-                      className="w-full px-3.5 py-2.5 font-mono-num font-bold text-xs text-blue-700 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                      className={`w-full px-3.5 py-2.5 font-mono-num font-bold text-xs text-blue-700 bg-white border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                        errors.contractNumber ? 'border-red-400 focus:ring-red-500' : 'border-slate-300'
+                      }`}
                     />
                   </div>
+                  {errors.contractNumber && (
+                    <p className="text-[11px] text-red-600 font-medium mt-1">{errors.contractNumber}</p>
+                  )}
                   <p className="text-[11px] text-slate-400 mt-1">
                     Số hợp đồng được tự động điền tiếp nối theo thứ tự tăng dần ({contractNumberStr || '1080'}). Bạn có thể chỉnh sửa nếu cần.
                   </p>

@@ -30,6 +30,8 @@ import {
   AlertTriangle,
   GraduationCap,
   UserMinus,
+  FileCheck,
+  ShieldCheck,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -56,6 +58,7 @@ import { CardDesignerView } from './components/CardDesignerView';
 import { BatchPrintView } from './components/BatchPrintView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
+import { AiRulesView } from './components/AiRulesView';
 import {
   ExcelImportModal,
   ParsedExcelRow,
@@ -64,6 +67,7 @@ import { FaceCropStudioView } from './components/FaceCropStudioView';
 import { DepartmentManagementView } from './components/DepartmentManagementView';
 import { DocumentTemplateManagementView } from './components/DocumentTemplateManagementView';
 import { ContractManagementView } from './components/ContractManagementView';
+import { CreatedContractsView } from './components/CreatedContractsView';
 import { ExpiringContractsView } from './components/ExpiringContractsView';
 import { BirthdayManagementView } from './components/BirthdayManagementView';
 import { ResignationManagementView } from './components/ResignationManagementView';
@@ -96,7 +100,11 @@ export default function App() {
             ? newTabOrUpdater(prev)
             : newTabOrUpdater;
 
-        if (nextTab === 'probation_contracts' || nextTab === 'training_contracts') {
+        if (
+          nextTab === 'probation_contracts' ||
+          nextTab === 'training_contracts' ||
+          nextTab === 'created_contracts'
+        ) {
           setIsContractGroupOpen(true);
         } else if (['face_crop', 'designer', 'print', 'history'].includes(nextTab)) {
           setIsCardGroupOpen(true);
@@ -124,7 +132,11 @@ export default function App() {
     const initialTab = getTabFromUrl();
     updateDocumentTitle(initialTab);
 
-    if (initialTab === 'probation_contracts' || initialTab === 'training_contracts') {
+    if (
+      initialTab === 'probation_contracts' ||
+      initialTab === 'training_contracts' ||
+      initialTab === 'created_contracts'
+    ) {
       setIsContractGroupOpen(true);
     } else if (['face_crop', 'designer', 'print', 'history'].includes(initialTab)) {
       setIsCardGroupOpen(true);
@@ -144,7 +156,11 @@ export default function App() {
       const currentTab = getTabFromUrl();
       setActiveTabState(currentTab);
       updateDocumentTitle(currentTab);
-      if (currentTab === 'probation_contracts' || currentTab === 'training_contracts') {
+      if (
+        currentTab === 'probation_contracts' ||
+        currentTab === 'training_contracts' ||
+        currentTab === 'created_contracts'
+      ) {
         setIsContractGroupOpen(true);
       } else if (['face_crop', 'designer', 'print', 'history'].includes(currentTab)) {
         setIsCardGroupOpen(true);
@@ -857,7 +873,9 @@ export default function App() {
   };
 
   const isContractGroupActive =
-    activeTab === 'probation_contracts' || activeTab === 'training_contracts';
+    activeTab === 'probation_contracts' ||
+    activeTab === 'training_contracts' ||
+    activeTab === 'created_contracts';
 
   const hdtvEmployeesCount = useMemo(() => {
     return employees.filter((e) => {
@@ -940,6 +958,11 @@ export default function App() {
       label: 'Hợp đồng đào tạo',
       icon: GraduationCap,
       badge: hddtEmployeesCount > 0 ? `${hddtEmployeesCount}` : undefined,
+    },
+    {
+      id: 'created_contracts' as const,
+      label: 'Hợp đồng đã tạo',
+      icon: FileCheck,
     },
   ];
 
@@ -1588,6 +1611,31 @@ export default function App() {
                   <span className="truncate flex-1 text-left font-medium">Cài đặt hệ thống</span>
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('ai_rules');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`mt-1 w-full flex items-center gap-3 px-3 py-2.5 text-xs font-semibold rounded-xl cursor-pointer transition-all ${
+                  isSidebarCollapsed ? 'justify-center px-0' : ''
+                } ${
+                  activeTab === 'ai_rules'
+                    ? 'bg-blue-700 text-white shadow-xs font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+                title="Quy tắc AI Code"
+              >
+                <ShieldCheck
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'ai_rules' ? 'text-white' : 'text-slate-500'
+                  }`}
+                />
+                {!isSidebarCollapsed && (
+                  <span className="truncate flex-1 text-left font-medium">Quy tắc AI Code</span>
+                )}
+              </button>
             </div>
           </nav>
         </div>
@@ -1731,6 +1779,14 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'created_contracts' && (
+          <CreatedContractsView
+            employees={employees}
+            onRefreshData={loadWorkspaceData}
+            onBatchUpdateEmployees={handleBatchUpdateEmployees}
+          />
+        )}
+
         {activeTab === 'expiring_contracts' && (
           <ExpiringContractsView
             employees={employees}
@@ -1837,6 +1893,8 @@ export default function App() {
             onSaveSettings={handleSaveSettings}
           />
         )}
+
+        {activeTab === 'ai_rules' && <AiRulesView />}
           </ErrorBoundary>
       </main>
       </div>

@@ -713,24 +713,109 @@ router.post('/employees/batch-probation-salary', async (req, res) => {
 });
 
 /**
- * Helper: Lấy số hợp đồng gợi ý tiếp theo mà không làm tăng sequence (peek)
+ * Helper: Chuẩn hóa số hợp đồng để kiểm tra trùng lặp
+ * (cắt khoảng trắng, bỏ các số 0 ở đầu, không phân biệt hoa thường)
  */
-async function peekNextContractNumber(client) {
+function normalizeContractNumber(val) {
+  const raw = String(val || '').trim();
+  if (!raw) return '';
+  const stripped = raw.replace(/^0+/, '');
+  return (stripped || '0').toLowerCase();
+}
+
+/**
+ * Helper: Định dạng số hợp đồng chuẩn (tối thiểu 4 chữ số nếu < 1000)
+ */
+function formatContractNumberSeq(num) {
+  return num < 1000 ? String(num).padStart(4, '0') : String(num);
+}
+
+/**
+ * Helper: Lấy tập hợp tất cả số hợp đồng đã tồn tại trong DB (cả bảng contracts và employees.so_hd)
+ */
+async function getExistingContractNumberSet(client, options = {}) {
+  const { excludeContractId = null, excludeEmployeeId = null } = options;
+  const set = new Set();
+
+  const ctrQuery = excludeContractId
+    ? client.query(
+        `SELECT DISTINCT TRIM(contract_number) AS num FROM contracts WHERE TRIM(COALESCE(contract_number, '')) <> '' AND id <> $1`,
+        [excludeContractId]
+      )
+    : client.query(
+        `SELECT DISTINCT TRIM(contract_number) AS num FROM contracts WHERE TRIM(COALESCE(contract_number, '')) <> ''`
+      );
+
+  const empQuery = excludeEmployeeId
+    ? client.query(
+        `SELECT DISTINCT TRIM(so_hd) AS num FROM employees WHERE TRIM(COALESCE(so_hd, '')) <> '' AND id <> $1`,
+        [excludeEmployeeId]
+      )
+    : client.query(
+        `SELECT DISTINCT TRIM(so_hd) AS num FROM employees WHERE TRIM(COALESCE(so_hd, '')) <> ''`
+      );
+
+  const [ctrRes, empRes] = await Promise.all([ctrQuery, empQuery]);
+  for (const row of ctrRes.rows) {
+    const norm = normalizeContractNumber(row.num);
+    if (norm) set.add(norm);
+  }
+  for (const row of empRes.rows) {
+    const norm = normalizeContractNumber(row.num);
+    if (norm) set.add(norm);
+  }
+  return set;
+}
+
+/**
+ * Helper: Lấy danh sách `count` số hợp đồng gợi ý tiếp theo không trùng với bất kỳ số nào đã có
+ * mà không làm tăng sequence (peek)
+ */
+async function peekNextContractNumbers(client, count = 1) {
   try {
-    const r = await client.query(`SELECT last_value, is_called FROM contract_number_seq`);
-    if (r.rows.length === 0) return '1080';
-    const { last_value, is_called } = r.rows[0];
-    const nextNum = is_called ? parseInt(last_value, 10) + 1 : parseInt(last_value, 10);
-    return nextNum < 1000 ? String(nextNum).padStart(4, '0') : String(nextNum);
+    const [seqRes, existingSet] = await Promise.all([
+      client.query(`SELECT last_value, is_called FROM contract_number_seq`),
+      getExistingContractNumberSet(client),
+    ]);
+    let candidate = 1080;
+    if (seqRes.rows.length > 0) {
+      const { last_value, is_called } = seqRes.rows[0];
+      candidate = is_called ? parseInt(last_value, 10) + 1 : parseInt(last_value, 10);
+    }
+    if (isNaN(candidate) || candidate < 1) candidate = 1080;
+
+    const numbers = [];
+    while (numbers.length < count) {
+      const formatted = formatContractNumberSeq(candidate);
+      const norm = normalizeContractNumber(formatted);
+      if (!existingSet.has(norm)) {
+        numbers.push(formatted);
+        existingSet.add(norm);
+      }
+      candidate += 1;
+    }
+    return numbers;
   } catch (err) {
-    console.error('Lỗi peekNextContractNumber:', err);
-    return '1080';
+    console.error('Lỗi peekNextContractNumbers:', err);
+    const fallback = [];
+    for (let i = 0; i < count; i++) {
+      fallback.push(formatContractNumberSeq(1080 + i));
+    }
+    return fallback;
   }
 }
 
 /**
- * Helper: Sinh số hợp đồng tăng dần kế tiếp (gọi nextval)
- * Nếu người dùng chỉ định số tùy ý, đồng bộ sequence nếu cần và trả về số đó.
+ * Helper: Lấy số hợp đồng gợi ý tiếp theo mà không làm tăng sequence (peek)
+ */
+async function peekNextContractNumber(client) {
+  const nums = await peekNextContractNumbers(client, 1);
+  return nums[0] || '1080';
+}
+
+/**
+ * Helper: Sinh số hợp đồng tăng dần kế tiếp (gọi nextval) và bỏ qua mọi số đã tồn tại trong DB.
+ * Nếu người dùng chỉ định số tùy ý (nhập tay), cho phép lưu (kể cả trùng) và đồng bộ sequence nếu cần.
  */
 async function generateNextContractNumber(client, preferredNumber) {
   if (preferredNumber && String(preferredNumber).trim()) {
@@ -749,30 +834,35 @@ async function generateNextContractNumber(client, preferredNumber) {
     return cleanNum;
   }
 
+  const existingSet = await getExistingContractNumberSet(client);
   try {
-    const r = await client.query(`SELECT nextval('contract_number_seq') as next_val`);
-    const val = parseInt(r.rows[0].next_val, 10);
-    return val < 1000 ? String(val).padStart(4, '0') : String(val);
+    while (true) {
+      const r = await client.query(`SELECT nextval('contract_number_seq') as next_val`);
+      const val = parseInt(r.rows[0].next_val, 10);
+      const formatted = formatContractNumberSeq(val);
+      if (!existingSet.has(normalizeContractNumber(formatted))) {
+        return formatted;
+      }
+    }
   } catch (err) {
     console.error('Lỗi generateNextContractNumber:', err);
-    return '1080';
+    let candidate = 1080;
+    while (existingSet.has(normalizeContractNumber(formatContractNumberSeq(candidate)))) {
+      candidate += 1;
+    }
+    return formatContractNumberSeq(candidate);
   }
 }
 
 /**
  * API Lấy số hợp đồng gợi ý tiếp theo: GET /api/contracts/next-number
- * Hỗ trợ tham số ?count=N để sinh danh sách số tăng dần cho nhiều nhân viên
+ * Hỗ trợ tham số ?count=N để sinh danh sách số tăng dần không trùng cho nhiều nhân viên
  */
 router.get('/contracts/next-number', async (req, res) => {
   try {
     const count = Math.max(1, parseInt(req.query.count, 10) || 1);
-    const startNumber = await peekNextContractNumber(pool);
-    const startVal = parseInt(startNumber, 10) || 1080;
-    const numbers = [];
-    for (let i = 0; i < count; i++) {
-      const v = startVal + i;
-      numbers.push(v < 1000 ? String(v).padStart(4, '0') : String(v));
-    }
+    const numbers = await peekNextContractNumbers(pool, count);
+    const startNumber = numbers[0] || '1080';
     res.json({
       success: true,
       nextContractNumber: startNumber,
@@ -829,7 +919,7 @@ router.post('/contracts/allocate-numbers', async (req, res) => {
       }
 
       // 1. Cập nhật so_hd và trạng thái đã ký cho nhân viên trong bảng employees
-      const todaySignDate = (startDate && String(startDate).trim()) || new Date().toLocaleDateString('vi-VN');
+      const todaySignDate = new Date().toLocaleDateString('vi-VN');
       const empRes = await client.query(
         `UPDATE employees
          SET so_hd = $1, da_ky_hop_dong = true, ngay_ky_hop_dong = $2, updated_at = CURRENT_TIMESTAMP
@@ -860,8 +950,10 @@ router.post('/contracts/allocate-numbers', async (req, res) => {
         `INSERT INTO contracts (
            id, employee_id, msnv, full_name, contract_number,
            contract_type, contract_type_name, duration,
-           start_date, end_date, status, note, owner_id
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Hiệu lực', $11, $12)`,
+           start_date, end_date, status, note,
+           salary, probation_salary, bac_luong, ngach_luong,
+           department, position, sign_date, owner_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Hiệu lực', $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
         [
           contractId,
           employeeId,
@@ -874,6 +966,13 @@ router.post('/contracts/allocate-numbers', async (req, res) => {
           computedStart,
           computedEnd,
           finalNote,
+          emp.luongChinhThuc || '',
+          emp.luongThuViec || '',
+          emp.bacLuong || '',
+          emp.ngachLuong || '',
+          emp.phongBanCon || emp.department || emp.phongBan || '',
+          emp.chucVu || emp.congViec || '',
+          todaySignDate,
           emp.ownerId || WORKSPACE_ID,
         ]
       );
@@ -930,7 +1029,67 @@ router.post('/contracts/toggle-signed', async (req, res) => {
         [Boolean(isSigned), computedDate, empId]
       );
       if (empRes.rows.length > 0) {
-        updatedEmployees.push(empRes.rows[0]);
+        const emp = empRes.rows[0];
+        updatedEmployees.push(emp);
+
+        if (isSigned) {
+          const contractNum = String(emp.soHd || '').trim();
+          const existingCtr = await client.query(
+            `SELECT id FROM contracts
+             WHERE employee_id = $1 AND COALESCE(contract_number, '') = $2
+             LIMIT 1`,
+            [empId, contractNum]
+          );
+          if (existingCtr.rowCount > 0) {
+            await client.query(
+              `UPDATE contracts SET sign_date = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+              [existingCtr.rows[0].id, computedDate]
+            );
+          } else {
+            const ctrId = `ctr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            const loaiHd = emp.loaiHd || 'HĐTV';
+            const loaiHdName =
+              loaiHd === 'HĐTV'
+                ? 'Hợp đồng thử việc'
+                : loaiHd === 'HĐĐT'
+                  ? 'Hợp đồng đào tạo'
+                  : loaiHd === 'HĐKXĐ'
+                    ? 'HĐLĐ không xác định thời hạn'
+                    : loaiHd === 'HĐXĐTH'
+                      ? 'HĐLĐ xác định thời hạn'
+                      : loaiHd;
+            await client.query(
+              `INSERT INTO contracts (
+                 id, employee_id, msnv, full_name, contract_number,
+                 contract_type, contract_type_name, duration,
+                 start_date, end_date, status, note,
+                 salary, probation_salary, bac_luong, ngach_luong,
+                 department, position, sign_date, owner_id
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Hiệu lực', $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+              [
+                ctrId,
+                empId,
+                emp.msnv || '',
+                emp.fullName || '',
+                contractNum,
+                loaiHd,
+                loaiHdName,
+                emp.thoiHan || '',
+                emp.tuNgay || emp.ngayVao || emp.joinDate || '',
+                emp.denNgay || '',
+                emp.ghiChuHopDong || 'Đánh dấu đã ký hợp đồng',
+                emp.luongChinhThuc || '',
+                emp.luongThuViec || '',
+                emp.bacLuong || '',
+                emp.ngachLuong || '',
+                emp.phongBanCon || emp.department || emp.phongBan || '',
+                emp.chucVu || emp.congViec || '',
+                computedDate,
+                emp.ownerId || WORKSPACE_ID,
+              ]
+            );
+          }
+        }
       }
     }
 
@@ -1196,9 +1355,113 @@ router.post('/contracts/renew', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Lỗi POST /contracts/renew:', err);
-    res.status(500).json({ success: false, error: err.message || 'Lỗi xử lý tái ký hợp đồng' });
+    res.status(err.statusCode || 500).json({ success: false, error: err.message || 'Lỗi xử lý tái ký hợp đồng' });
   } finally {
     client.release();
+  }
+});
+
+// Lấy danh sách toàn bộ hợp đồng đã tạo trong hệ thống (bao gồm cả bảng contracts và dữ liệu đã ký / đã cấp số trong bảng employees)
+router.get('/contracts', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM (
+        SELECT
+          c.id,
+          c.employee_id AS "employeeId",
+          COALESCE(NULLIF(c.msnv, ''), e.msnv, '') AS msnv,
+          COALESCE(NULLIF(c.full_name, ''), e.full_name, '') AS "fullName",
+          c.contract_number AS "contractNumber",
+          c.contract_type AS "contractType",
+          c.contract_type_name AS "contractTypeName",
+          c.duration,
+          c.start_date AS "startDate",
+          c.end_date AS "endDate",
+          c.status,
+          c.note,
+          COALESCE(NULLIF(c.salary, ''), e.luong_chinh_thuc, '') AS salary,
+          COALESCE(NULLIF(c.probation_salary, ''), e.luong_thu_viec, '') AS "probationSalary",
+          COALESCE(NULLIF(c.bac_luong, ''), e.bac_luong, '') AS "bacLuong",
+          COALESCE(NULLIF(c.ngach_luong, ''), e.ngach_luong, '') AS "ngachLuong",
+          COALESCE(NULLIF(c.department, ''), NULLIF(e.phong_ban_con, ''), NULLIF(e.department, ''), e.phong_ban, '') AS department,
+          COALESCE(NULLIF(c.position, ''), NULLIF(e.chuc_vu, ''), e.cong_viec, '') AS position,
+          COALESCE(NULLIF(c.sign_date, ''), e.ngay_ky_hop_dong, '') AS "signDate",
+          CASE
+            WHEN COALESCE(NULLIF(c.sign_date, ''), e.ngay_ky_hop_dong, '') <> '' OR COALESCE(e.da_ky_hop_dong, false) = true THEN true
+            ELSE false
+          END AS "isSigned",
+          c.extra_data AS "extraData",
+          c.owner_id AS "ownerId",
+          c.created_at AS "createdAt",
+          c.updated_at AS "updatedAt",
+          e.photo_url AS "photoUrl",
+          e.tinh_trang AS "employeeStatus"
+        FROM contracts c
+        LEFT JOIN employees e ON c.employee_id = e.id
+
+        UNION ALL
+
+        SELECT
+          ('emp_ctr_' || e.id) AS id,
+          e.id AS "employeeId",
+          COALESCE(e.msnv, '') AS msnv,
+          COALESCE(e.full_name, '') AS "fullName",
+          COALESCE(e.so_hd, '') AS "contractNumber",
+          COALESCE(NULLIF(e.loai_hd, ''), 'HĐTV') AS "contractType",
+          CASE UPPER(TRIM(COALESCE(e.loai_hd, '')))
+            WHEN 'HĐTV' THEN 'Hợp đồng thử việc'
+            WHEN 'HĐĐT' THEN 'Hợp đồng đào tạo'
+            WHEN 'HĐKXĐ' THEN 'HĐLĐ không xác định thời hạn'
+            WHEN 'HĐXĐTH' THEN 'HĐLĐ xác định thời hạn'
+            ELSE COALESCE(NULLIF(e.loai_hd, ''), 'Hợp đồng lao động')
+          END AS "contractTypeName",
+          COALESCE(e.thoi_han, '') AS duration,
+          COALESCE(NULLIF(e.tu_ngay, ''), NULLIF(e.ngay_vao, ''), e.join_date, '') AS "startDate",
+          COALESCE(e.den_ngay, '') AS "endDate",
+          CASE
+            WHEN e.tinh_trang = 'Nghỉ việc' THEN 'Đã chấm dứt'
+            ELSE COALESCE(NULLIF(e.trang_thai_hop_dong, ''), 'Hiệu lực')
+          END AS status,
+          COALESCE(e.ghi_chu_hop_dong, '') AS note,
+          COALESCE(e.luong_chinh_thuc, '') AS salary,
+          COALESCE(e.luong_thu_viec, '') AS "probationSalary",
+          COALESCE(e.bac_luong, '') AS "bacLuong",
+          COALESCE(e.ngach_luong, '') AS "ngachLuong",
+          COALESCE(NULLIF(e.phong_ban_con, ''), NULLIF(e.department, ''), e.phong_ban, '') AS department,
+          COALESCE(NULLIF(e.chuc_vu, ''), e.cong_viec, '') AS position,
+          COALESCE(e.ngay_ky_hop_dong, '') AS "signDate",
+          COALESCE(e.da_ky_hop_dong, false) AS "isSigned",
+          '{}'::jsonb AS "extraData",
+          e.owner_id AS "ownerId",
+          COALESCE(e.updated_at, e.created_at) AS "createdAt",
+          e.updated_at AS "updatedAt",
+          e.photo_url AS "photoUrl",
+          e.tinh_trang AS "employeeStatus"
+        FROM employees e
+        WHERE (e.da_ky_hop_dong = true OR TRIM(COALESCE(e.so_hd, '')) <> '')
+          AND NOT EXISTS (
+            SELECT 1 FROM contracts c2
+            WHERE c2.employee_id = e.id
+              AND (COALESCE(c2.contract_number, '') = COALESCE(e.so_hd, '') OR c2.status = 'Hiệu lực')
+          )
+      ) all_contracts
+      ORDER BY
+        CASE WHEN id LIKE 'emp_ctr_%' THEN 1 ELSE 0 END ASC,
+        "createdAt" DESC NULLS LAST,
+        "isSigned" DESC,
+        CASE
+          WHEN "signDate" ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_DATE("signDate", 'DD/MM/YYYY')
+          WHEN "signDate" ~ '^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$' THEN TO_DATE("signDate", 'YYYY-MM-DD')
+          ELSE NULL
+        END DESC NULLS LAST,
+        NULLIF((REGEXP_MATCH(COALESCE("contractNumber", ''), '([0-9]+)'))[1], '')::BIGINT DESC NULLS LAST,
+        "contractNumber" DESC,
+        id DESC`
+    );
+    res.json({ success: true, contracts: result.rows });
+  } catch (err) {
+    console.error('Lỗi GET /contracts:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1271,6 +1534,46 @@ router.post('/contracts', async (req, res) => {
     const status = body.status || 'Hiệu lực';
 
     if (status === 'Hiệu lực') {
+      // Bảo toàn hợp đồng cũ từ bảng employees nếu trước đó chưa từng có bản ghi trong bảng contracts
+      if (emp.so_hd && String(emp.so_hd).trim() !== '') {
+        const prevCountRes = await client.query(
+          `SELECT COUNT(*) FROM contracts WHERE employee_id = $1`,
+          [employeeId]
+        );
+        if (parseInt(prevCountRes.rows[0].count, 10) === 0) {
+          const oldId = `ctr_prev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          await client.query(
+            `INSERT INTO contracts (
+              id, employee_id, msnv, full_name, contract_number, contract_type,
+              contract_type_name, duration, start_date, end_date, status, note,
+              salary, probation_salary, bac_luong, ngach_luong, department, position,
+              sign_date, owner_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Đã tái ký', $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+            [
+              oldId,
+              employeeId,
+              emp.msnv || '',
+              emp.full_name || '',
+              emp.so_hd || '',
+              emp.loai_hd || 'HĐTV',
+              emp.loai_hd || 'Hợp đồng cũ',
+              emp.thoi_han || '',
+              emp.tu_ngay || emp.ngay_vao || emp.join_date || '',
+              emp.den_ngay || '',
+              emp.ghi_chu_hop_dong || 'Hợp đồng trước khi tạo hợp đồng mới',
+              emp.luong_chinh_thuc || '',
+              emp.luong_thu_viec || '',
+              emp.bac_luong || '',
+              emp.ngach_luong || '',
+              emp.phong_ban_con || emp.department || emp.phong_ban || '',
+              emp.chuc_vu || emp.cong_viec || '',
+              emp.ngay_ky_hop_dong || '',
+              emp.owner_id || WORKSPACE_ID,
+            ]
+          );
+        }
+      }
+
       // Đổi trạng thái các hợp đồng hiệu lực cũ sang 'Đã tái ký' (giữ nguyên không xóa lịch sử)
       await client.query(
         `UPDATE contracts 
@@ -1280,7 +1583,10 @@ router.post('/contracts', async (req, res) => {
       );
     }
 
-    const finalContractNumber = body.contractNumber || body.soHd || (status === 'Hiệu lực' ? await generateNextContractNumber(client) : emp.so_hd || '');
+    const requestedContractNumber = body.contractNumber || body.soHd;
+    const finalContractNumber = requestedContractNumber
+      ? await generateNextContractNumber(client, requestedContractNumber)
+      : (status === 'Hiệu lực' ? await generateNextContractNumber(client) : emp.so_hd || '');
 
     const insRes = await client.query(`
       INSERT INTO contracts (
@@ -1332,6 +1638,8 @@ router.post('/contracts', async (req, res) => {
             thoi_han = COALESCE(NULLIF($4, ''), thoi_han),
             tu_ngay = COALESCE(NULLIF($5, ''), tu_ngay),
             den_ngay = COALESCE(NULLIF($6, ''), den_ngay),
+            ngay_ky_hop_dong = COALESCE(NULLIF($7, ''), ngay_ky_hop_dong),
+            da_ky_hop_dong = CASE WHEN COALESCE(NULLIF($7, ''), '') <> '' THEN true ELSE da_ky_hop_dong END,
             trang_thai_hop_dong = 'Hiệu lực',
             tinh_trang = CASE WHEN tinh_trang = 'Nghỉ việc' OR tinh_trang = 'Hết hiệu lực' THEN 'LV' ELSE tinh_trang END,
             updated_at = CURRENT_TIMESTAMP
@@ -1344,6 +1652,7 @@ router.post('/contracts', async (req, res) => {
         body.duration || body.thoiHan,
         body.startDate || body.tuNgay,
         body.endDate || body.denNgay,
+        body.signDate || '',
       ]);
       updatedEmp = upEmp.rows[0];
     }
@@ -1353,9 +1662,224 @@ router.post('/contracts', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Lỗi POST /contracts:', err);
+    res.status(err.statusCode || 500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Cập nhật thông tin hợp đồng đã tạo
+router.put('/contracts/:id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+
+    await client.query('BEGIN');
+
+    // Nếu là bản ghi tổng hợp từ bảng employees (chưa có trong bảng contracts), tạo bản ghi thật trong contracts
+    if (id.startsWith('emp_ctr_')) {
+      const employeeId = id.slice('emp_ctr_'.length);
+      const empRes = await client.query('SELECT * FROM employees WHERE id = $1 FOR UPDATE', [employeeId]);
+      if (empRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: 'Không tìm thấy nhân viên của hợp đồng' });
+      }
+      const emp = empRes.rows[0];
+      const newContractId = `ctr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const contractNumber = body.contractNumber !== undefined ? String(body.contractNumber).trim() : (emp.so_hd || '');
+      const contractType = body.contractType !== undefined ? String(body.contractType).trim() : (emp.loai_hd || 'HĐTV');
+      const contractTypeName = body.contractTypeName !== undefined ? String(body.contractTypeName).trim() : contractType;
+      const duration = body.duration !== undefined ? String(body.duration).trim() : (emp.thoi_han || '');
+      const startDate = body.startDate !== undefined ? String(body.startDate).trim() : (emp.tu_ngay || emp.ngay_vao || emp.join_date || '');
+      const endDate = body.endDate !== undefined ? String(body.endDate || '').trim() : (emp.den_ngay || '');
+      const status = body.status !== undefined ? String(body.status).trim() : (emp.trang_thai_hop_dong || 'Hiệu lực');
+      const note = body.note !== undefined ? String(body.note) : (emp.ghi_chu_hop_dong || '');
+      const salary = body.salary !== undefined ? String(body.salary) : (emp.luong_chinh_thuc || '');
+      const probationSalary = body.probationSalary !== undefined ? String(body.probationSalary) : (emp.luong_thu_viec || '');
+      const bacLuong = body.bacLuong !== undefined ? String(body.bacLuong) : (emp.bac_luong || '');
+      const ngachLuong = body.ngachLuong !== undefined ? String(body.ngachLuong) : (emp.ngach_luong || '');
+      const department = body.department !== undefined ? String(body.department) : (emp.phong_ban_con || emp.department || emp.phong_ban || '');
+      const position = body.position !== undefined ? String(body.position) : (emp.chuc_vu || emp.cong_viec || '');
+      const signDate = body.signDate !== undefined ? String(body.signDate) : (emp.ngay_ky_hop_dong || '');
+
+      const insRes = await client.query(
+        `INSERT INTO contracts (
+           id, employee_id, msnv, full_name, contract_number, contract_type,
+           contract_type_name, duration, start_date, end_date, status, note,
+           salary, probation_salary, bac_luong, ngach_luong, department, position,
+           sign_date, owner_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+         RETURNING
+           id, employee_id AS "employeeId", msnv, full_name AS "fullName",
+           contract_number AS "contractNumber", contract_type AS "contractType",
+           contract_type_name AS "contractTypeName", duration,
+           start_date AS "startDate", end_date AS "endDate", status, note,
+           salary, probation_salary AS "probationSalary", bac_luong AS "bacLuong",
+           ngach_luong AS "ngachLuong", department, position,
+           sign_date AS "signDate", extra_data AS "extraData", owner_id AS "ownerId",
+           created_at AS "createdAt", updated_at AS "updatedAt"`,
+        [
+          newContractId, employeeId, emp.msnv || '', emp.full_name || '',
+          contractNumber, contractType, contractTypeName, duration,
+          startDate, endDate, status, note,
+          salary, probationSalary, bacLuong, ngachLuong,
+          department, position, signDate, emp.owner_id || WORKSPACE_ID
+        ]
+      );
+
+      let updatedEmployee = null;
+      if (status === 'Hiệu lực') {
+        const empUp = await client.query(
+          `UPDATE employees
+           SET so_hd = COALESCE(NULLIF($2, ''), so_hd),
+               loai_hd = COALESCE(NULLIF($3, ''), loai_hd),
+               thoi_han = COALESCE(NULLIF($4, ''), thoi_han),
+               tu_ngay = COALESCE(NULLIF($5, ''), tu_ngay),
+               den_ngay = COALESCE(NULLIF($6, ''), den_ngay),
+               ngay_ky_hop_dong = COALESCE(NULLIF($7, ''), ngay_ky_hop_dong),
+               da_ky_hop_dong = CASE WHEN COALESCE(NULLIF($7, ''), '') <> '' THEN true ELSE da_ky_hop_dong END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1
+           RETURNING ${EMPLOYEE_SELECT_FIELDS}`,
+          [employeeId, contractNumber, contractType, duration, startDate, endDate, signDate]
+        );
+        if (empUp.rows.length > 0) updatedEmployee = empUp.rows[0];
+      }
+
+      await client.query('COMMIT');
+      return res.json({ success: true, contract: insRes.rows[0], employee: updatedEmployee });
+    }
+
+    const existingRes = await client.query('SELECT * FROM contracts WHERE id = $1 FOR UPDATE', [id]);
+    if (existingRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Không tìm thấy hợp đồng' });
+    }
+    const existing = existingRes.rows[0];
+
+    const contractNumber = body.contractNumber !== undefined ? String(body.contractNumber).trim() : existing.contract_number;
+    const contractType = body.contractType !== undefined ? String(body.contractType).trim() : existing.contract_type;
+    const contractTypeName = body.contractTypeName !== undefined ? String(body.contractTypeName).trim() : existing.contract_type_name;
+    const duration = body.duration !== undefined ? String(body.duration).trim() : existing.duration;
+    const startDate = body.startDate !== undefined ? String(body.startDate).trim() : existing.start_date;
+    const endDate = body.endDate !== undefined ? String(body.endDate || '').trim() : existing.end_date;
+    const status = body.status !== undefined ? String(body.status).trim() : existing.status;
+    const note = body.note !== undefined ? String(body.note) : existing.note;
+    const salary = body.salary !== undefined ? String(body.salary) : existing.salary;
+    const probationSalary = body.probationSalary !== undefined ? String(body.probationSalary) : existing.probation_salary;
+    const bacLuong = body.bacLuong !== undefined ? String(body.bacLuong) : existing.bac_luong;
+    const ngachLuong = body.ngachLuong !== undefined ? String(body.ngachLuong) : existing.ngach_luong;
+    const department = body.department !== undefined ? String(body.department) : existing.department;
+    const position = body.position !== undefined ? String(body.position) : existing.position;
+    const signDate = body.signDate !== undefined ? String(body.signDate) : existing.sign_date;
+
+    const upRes = await client.query(
+      `UPDATE contracts
+       SET contract_number = $2,
+           contract_type = $3,
+           contract_type_name = $4,
+           duration = $5,
+           start_date = $6,
+           end_date = $7,
+           status = $8,
+           note = $9,
+           salary = $10,
+           probation_salary = $11,
+           bac_luong = $12,
+           ngach_luong = $13,
+           department = $14,
+           position = $15,
+           sign_date = $16,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING
+         id, employee_id AS "employeeId", msnv, full_name AS "fullName",
+         contract_number AS "contractNumber", contract_type AS "contractType",
+         contract_type_name AS "contractTypeName", duration,
+         start_date AS "startDate", end_date AS "endDate", status, note,
+         salary, probation_salary AS "probationSalary", bac_luong AS "bacLuong",
+         ngach_luong AS "ngachLuong", department, position,
+         sign_date AS "signDate", extra_data AS "extraData", owner_id AS "ownerId",
+         created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [
+        id,
+        contractNumber,
+        contractType,
+        contractTypeName,
+        duration,
+        startDate,
+        endDate,
+        status,
+        note,
+        salary,
+        probationSalary,
+        bacLuong,
+        ngachLuong,
+        department,
+        position,
+        signDate,
+      ]
+    );
+
+    // Nếu hợp đồng đang có trạng thái Hiệu lực, đồng bộ lại một số trường chính sang hồ sơ nhân viên
+    let updatedEmployee = null;
+    if (status === 'Hiệu lực' && existing.employee_id) {
+      const empUp = await client.query(
+        `UPDATE employees
+         SET so_hd = COALESCE(NULLIF($2, ''), so_hd),
+             loai_hd = COALESCE(NULLIF($3, ''), loai_hd),
+             thoi_han = COALESCE(NULLIF($4, ''), thoi_han),
+             tu_ngay = COALESCE(NULLIF($5, ''), tu_ngay),
+             den_ngay = COALESCE(NULLIF($6, ''), den_ngay),
+             ngay_ky_hop_dong = COALESCE(NULLIF($7, ''), ngay_ky_hop_dong),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING ${EMPLOYEE_SELECT_FIELDS}`,
+        [existing.employee_id, contractNumber, contractType, duration, startDate, endDate, signDate]
+      );
+      if (empUp.rows.length > 0) {
+        updatedEmployee = empUp.rows[0];
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, contract: upRes.rows[0], employee: updatedEmployee });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Lỗi PUT /contracts/:id:', err);
     res.status(500).json({ success: false, error: err.message });
   } finally {
     client.release();
+  }
+});
+
+// Xóa bản ghi hợp đồng đã tạo
+router.delete('/contracts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id.startsWith('emp_ctr_')) {
+      const employeeId = id.slice('emp_ctr_'.length);
+      const upRes = await pool.query(
+        `UPDATE employees
+         SET so_hd = '', da_ky_hop_dong = false, ngay_ky_hop_dong = '', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING id`,
+        [employeeId]
+      );
+      if (upRes.rowCount === 0) {
+        return res.status(404).json({ success: false, error: 'Không tìm thấy nhân viên để gỡ hợp đồng' });
+      }
+      return res.json({ success: true, message: 'Đã gỡ thông tin số hợp đồng & trạng thái ký trên hồ sơ nhân viên' });
+    }
+    const delRes = await pool.query('DELETE FROM contracts WHERE id = $1 RETURNING id', [id]);
+    if (delRes.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Không tìm thấy hợp đồng để xóa' });
+    }
+    res.json({ success: true, message: 'Đã xóa hợp đồng thành công' });
+  } catch (err) {
+    console.error('Lỗi DELETE /contracts/:id:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -3227,7 +3751,105 @@ router.delete('/templates/:id', async (req, res) => {
 
 async function ensureDefaultDocumentTemplates() {
   try {
-    const check = await pool.query('SELECT count(*) FROM document_templates');
+    // Luôn đảm bảo mẫu QĐNV (Quyết định nghỉ việc) có sẵn trong hệ thống
+    await pool.query(`
+      INSERT INTO document_templates (id, name, category, file_name, content_html, raw_text)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      'doc_tpl_qdnv',
+      'VSDN_QDNV',
+      'Quyết định',
+      'VSDN_QDNV.docx',
+      `<table style="width: 100%; border-collapse: collapse; margin-top: 4px; margin-bottom: 10px;">
+  <tbody>
+    <tr>
+      <td style="vertical-align: top; padding: 4px 8px; width: 48%; border: none; text-align: center;">
+        <div style="font-weight: bold; font-size: 11pt; line-height: 1.4;">CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT</div>
+        <div style="font-weight: bold; font-size: 11pt; line-height: 1.4;"><u>CHI NHÁNH VIETSUN ĐỒNG NAI</u></div>
+        <div style="font-size: 12pt; margin-top: 6px;">Số : <strong>#Số quyết định#</strong></div>
+      </td>
+      <td style="vertical-align: top; padding: 4px 8px; width: 52%; border: none; text-align: center;">
+        <div style="font-weight: bold; font-size: 11pt; line-height: 1.4;">CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
+        <div style="font-weight: bold; font-size: 11pt; line-height: 1.4;"><u>Độc Lập – Tự Do – Hạnh Phúc</u></div>
+        <div style="font-size: 11pt; margin-top: 2px;">---oOo---</div>
+        <div style="font-style: italic; font-size: 12pt; margin-top: 4px;">Xuân Hòa, #Hôm nay#</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<div style="text-align: center; font-size: 16pt; font-weight: bold; margin-top: 12px; margin-bottom: 2px; text-transform: uppercase;">QUYẾT ĐỊNH</div>
+<div style="text-align: center; font-style: italic; font-size: 13pt; font-weight: bold; margin-bottom: 10px;">Về việc: Chấm dứt hợp đồng lao động</div>
+
+<div style="text-align: center; font-size: 13pt; font-weight: bold; line-height: 1.4; margin-bottom: 12px;">
+  VIETSUN ĐỒNG NAI<br/>
+  CHI NHÁNH CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT
+</div>
+
+<div style="font-size: 13pt; line-height: 1.5; margin-bottom: 12px; font-style: italic;">
+  <div>- Căn cứ Bộ Luật Lao động số 45/2019/QH14 ngày 20/11/2019;</div>
+  <div>- Căn cứ điều lệ tổ chức của Công ty cổ phần đầu tư Mặt Trời Việt – Chi nhánh Vietsun Đồng Nai;</div>
+  <div>- Căn cứ chức năng, quyền hạn của Giám đốc;</div>
+  <div>- Căn cứ đơn xin nghỉ việc, và thời hạn nghỉ việc của CBCNV.</div>
+</div>
+
+<div style="font-size: 13pt; line-height: 1.6; margin-bottom: 10px;">
+  <div><strong>Điều 1:</strong> Chấm dứt Hợp đồng lao động với:</div>
+  <div style="padding-left: 16px;">
+    <div>Ông / bà : <strong>#Họ và tên#</strong> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Ngày sinh: <strong>#Ngày sinh#</strong></div>
+    <div>Bộ phận/Phòng: <strong>#Công việc#</strong></div>
+    <div>Loại hợp đồng: <strong>#Loại HĐ đầy đủ#</strong></div>
+    <div>Lý do chấm dứt: <strong>#Lý do nghỉ việc#</strong></div>
+    <div>Thời gian chấm dứt từ ngày: <strong>#Ngày nghỉ việc#</strong></div>
+  </div>
+</div>
+
+<div style="font-size: 13pt; line-height: 1.6; margin-bottom: 10px;">
+  <div><strong>Điều 2:</strong> Chế độ thôi việc:</div>
+  <div style="padding-left: 16px;">
+    <div>Ông/Bà: <strong>#Họ và tên#</strong> được hưởng các khoản chế độ sau:</div>
+    <div>- Tiền lương và các phụ cấp khác theo lương của những ngày làm việc tại Công ty: Được chi trả đầy đủ theo quy chế nội bộ của Công ty và đúng theo quy định của pháp luật lao động.</div>
+    <div>- Chế độ trợ cấp thôi việc: Không</div>
+    <div>- Chế độ trợ cấp mất việc làm: Không</div>
+  </div>
+</div>
+
+<div style="font-size: 13pt; line-height: 1.6; margin-bottom: 10px;">
+  <div><strong>Điều 3:</strong> Bàn giao công việc và công dụng cụ:</div>
+  <div style="padding-left: 16px;">
+    <div>- Đã bàn giao công việc</div>
+    <div>- Đã trả thẻ tên</div>
+  </div>
+</div>
+
+<div style="font-size: 13pt; line-height: 1.6; margin-bottom: 20px;">
+  <div><strong>Điều 4:</strong> Phòng NLHC, Phòng KT_TC, các đơn vị có liên quan và Ông/ Bà có tên tại điều 1 chịu trách nhiệm thi hành Quyết định này.</div>
+  <div style="padding-left: 16px;">Quyết định có hiệu lực kể từ ngày : <strong>#Ngày nghỉ việc#</strong></div>
+</div>
+
+<table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+  <tbody>
+    <tr>
+      <td style="width: 45%; vertical-align: top; text-align: left; border: none; padding-left: 12px;">
+        <div style="font-weight: bold; font-size: 11pt;"><em>Nơi nhận:</em></div>
+        <div style="font-size: 11pt; line-height: 1.5; font-style: italic;">
+          - Như điều 4<br/>
+          - Lưu P. NLHC
+        </div>
+      </td>
+      <td style="width: 55%; vertical-align: top; text-align: center; border: none;">
+        <div style="font-weight: bold; font-size: 12pt; text-transform: uppercase;">GIÁM ĐỐC ĐIỀU HÀNH CHI NHÁNH</div>
+        <div style="height: 75px;"></div>
+        <div style="font-weight: bold; font-size: 12pt;">ĐỖ ĐẶNG QUỐC HUY</div>
+      </td>
+    </tr>
+  </tbody>
+</table>`,
+      'QUYẾT ĐỊNH Về việc: Chấm dứt hợp đồng lao động (QĐNV)'
+    ]);
+
+    const check = await pool.query('SELECT count(*) FROM document_templates WHERE id != $1', ['doc_tpl_qdnv']);
     if (parseInt(check.rows[0].count, 10) > 0) return;
 
     console.log('[PostgreSQL] Đang khởi tạo 3 mẫu văn bản Word mặc định...');

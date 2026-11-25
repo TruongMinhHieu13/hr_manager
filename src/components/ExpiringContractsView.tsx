@@ -104,7 +104,13 @@ export const ExpiringContractsView: React.FC<ExpiringContractsViewProps> = ({
   const [generatorTargetEmployees, setGeneratorTargetEmployees] = useState<Employee[]>([]);
 
   // Action Menu (3-dots) State
-  const [openActionMenuEmpId, setOpenActionMenuEmpId] = useState<string | null>(null);
+  const [actionMenuState, setActionMenuState] = useState<{
+    emp: Employee;
+    top: number;
+    bottom: number;
+    right: number;
+    openUpwards: boolean;
+  } | null>(null);
 
   // Modal Chấm dứt hợp đồng
   const [terminatingEmployee, setTerminatingEmployee] = useState<Employee | null>(null);
@@ -850,17 +856,30 @@ export const ExpiringContractsView: React.FC<ExpiringContractsViewProps> = ({
 
                       {/* Thao tác: Dấu 3 chấm mở menu thao tác */}
                       <td className="py-3.5 px-4 text-center">
-                        <div className="relative inline-block text-left">
+                        <div className="inline-block text-left">
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setOpenActionMenuEmpId(
-                                openActionMenuEmpId === item.employee.id ? null : item.employee.id
-                              );
+                              if (actionMenuState && actionMenuState.emp.id === item.employee.id) {
+                                setActionMenuState(null);
+                                return;
+                              }
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 290;
+                              const spaceBelow = window.innerHeight - rect.bottom;
+                              const openUpwards = spaceBelow < menuHeight && rect.top > menuHeight;
+
+                              setActionMenuState({
+                                emp: item.employee,
+                                top: rect.bottom + 4,
+                                bottom: window.innerHeight - rect.top + 4,
+                                right: window.innerWidth - rect.right,
+                                openUpwards,
+                              });
                             }}
                             className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
-                              openActionMenuEmpId === item.employee.id
+                              actionMenuState?.emp.id === item.employee.id
                                 ? 'bg-blue-100 text-blue-700'
                                 : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200'
                             }`}
@@ -868,119 +887,6 @@ export const ExpiringContractsView: React.FC<ExpiringContractsViewProps> = ({
                           >
                             <MoreVertical className="w-4 h-4" />
                           </button>
-
-                          {openActionMenuEmpId === item.employee.id && (
-                            <>
-                              <div
-                                className="fixed inset-0 z-30"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenActionMenuEmpId(null);
-                                }}
-                              />
-                              <div
-                                className={`absolute right-0 z-40 w-56 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 text-left text-xs animate-in fade-in zoom-in-95 duration-100 ${
-                                  paginatedContracts.indexOf(item) >= 4 &&
-                                  paginatedContracts.indexOf(item) >= paginatedContracts.length - 3
-                                    ? 'bottom-full mb-1 origin-bottom-right'
-                                    : 'top-full mt-1 origin-top-right'
-                                }`}
-                              >
-                                {/* Header của bảng thao tác */}
-                                <div className="px-3.5 py-1.5 border-b border-slate-100 flex items-center justify-between">
-                                  <span className="font-bold text-[10px] text-slate-400 uppercase tracking-wider">
-                                    Bảng thao tác
-                                  </span>
-                                  <span className="text-[10px] font-mono-num font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
-                                    {item.employee.msnv}
-                                  </span>
-                                </div>
-
-                                <div className="px-3.5 py-1 font-bold text-slate-900 text-xs truncate">
-                                  {item.employee.fullName}
-                                </div>
-
-                                <div className="py-1">
-                                  {/* THAO TÁC 0: Xem lịch sử hợp đồng */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      setViewingHistoryEmployee(item.employee);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-indigo-700 hover:bg-indigo-50 cursor-pointer transition-colors group font-semibold"
-                                  >
-                                    <div className="p-1 rounded-md bg-indigo-100 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                                      <History className="w-3.5 h-3.5" />
-                                    </div>
-                                    <span>Xem lịch sử hợp đồng</span>
-                                  </button>
-
-                                  {/* THAO TÁC 1: Tái ký hợp đồng */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      setRenewingEmployee(item.employee);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-blue-700 hover:bg-blue-50 cursor-pointer transition-colors group font-semibold"
-                                  >
-                                    <div className="p-1 rounded-md bg-blue-100 text-blue-700 group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                      <FileSignature className="w-3.5 h-3.5" />
-                                    </div>
-                                    <span>Tái ký hợp đồng</span>
-                                  </button>
-
-                                  {/* THAO TÁC 2: In / Tạo văn bản Hợp đồng */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      handleOpenDocGenerator([item.employee]);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 cursor-pointer transition-colors group"
-                                  >
-                                    <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
-                                    <span className="font-medium">Tạo / In hợp đồng</span>
-                                  </button>
-
-                                  {/* THAO TÁC 2: In thẻ nhân viên này */}
-                                  {onOpenPrintDialog && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setOpenActionMenuEmpId(null);
-                                        onOpenPrintDialog([item.employee.id]);
-                                      }}
-                                      className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-slate-50 hover:text-slate-900 cursor-pointer transition-colors"
-                                    >
-                                      <Printer className="w-3.5 h-3.5 text-slate-400" />
-                                      <span className="font-medium">In thẻ nhân viên này</span>
-                                    </button>
-                                  )}
-
-                                  {/* THAO TÁC 3: Chấm dứt hợp đồng (chỉ hiển thị khi hợp đồng chưa chấm dứt) */}
-                                  {onUpdateEmployee && !isContractTerminated(item.employee) && (
-                                    <div className="pt-1 mt-1 border-t border-slate-100">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setOpenActionMenuEmpId(null);
-                                          setTerminatingEmployee(item.employee);
-                                        }}
-                                        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-red-600 hover:bg-red-50 hover:text-red-700 cursor-pointer transition-colors group font-semibold"
-                                      >
-                                        <div className="p-1 rounded-md bg-red-100 text-red-600 group-hover:bg-red-600 group-hover:text-white transition-colors">
-                                          <FileX className="w-3.5 h-3.5" />
-                                        </div>
-                                        <span>Chấm dứt hợp đồng</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -1099,6 +1005,126 @@ export const ExpiringContractsView: React.FC<ExpiringContractsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Floating Action Menu (Bảng thao tác nổi - không bị che khuất bởi overflow bảng) */}
+      {actionMenuState && (
+        <>
+          <div
+            className="fixed inset-0 z-50 bg-transparent"
+            onClick={(e) => {
+              e.stopPropagation();
+              setActionMenuState(null);
+            }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: actionMenuState.openUpwards ? undefined : actionMenuState.top,
+              bottom: actionMenuState.openUpwards ? actionMenuState.bottom : undefined,
+              right: Math.max(16, actionMenuState.right),
+            }}
+            className="z-50 w-56 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 text-left text-xs animate-in fade-in zoom-in-95 duration-100"
+          >
+            {/* Header của bảng thao tác */}
+            <div className="px-3.5 py-1.5 border-b border-slate-100 flex items-center justify-between">
+              <span className="font-bold text-[10px] text-slate-400 uppercase tracking-wider">
+                Bảng thao tác
+              </span>
+              <span className="text-[10px] font-mono-num font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                {actionMenuState.emp.msnv}
+              </span>
+            </div>
+
+            <div className="px-3.5 py-1 font-bold text-slate-900 text-xs truncate">
+              {actionMenuState.emp.fullName}
+            </div>
+
+            <div className="py-1">
+              {/* THAO TÁC 0: Xem lịch sử hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetEmp = actionMenuState.emp;
+                  setActionMenuState(null);
+                  setViewingHistoryEmployee(targetEmp);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-indigo-700 hover:bg-indigo-50 cursor-pointer transition-colors group font-semibold"
+              >
+                <div className="p-1 rounded-md bg-indigo-100 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                  <History className="w-3.5 h-3.5" />
+                </div>
+                <span>Xem lịch sử hợp đồng</span>
+              </button>
+
+              {/* THAO TÁC 1: Tái ký hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetEmp = actionMenuState.emp;
+                  setActionMenuState(null);
+                  setRenewingEmployee(targetEmp);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-blue-700 hover:bg-blue-50 cursor-pointer transition-colors group font-semibold"
+              >
+                <div className="p-1 rounded-md bg-blue-100 text-blue-700 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                  <FileSignature className="w-3.5 h-3.5" />
+                </div>
+                <span>Tái ký hợp đồng</span>
+              </button>
+
+              {/* THAO TÁC 2: In / Tạo văn bản Hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetEmp = actionMenuState.emp;
+                  setActionMenuState(null);
+                  handleOpenDocGenerator([targetEmp]);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 cursor-pointer transition-colors group"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
+                <span className="font-medium">Tạo / In hợp đồng</span>
+              </button>
+
+              {/* THAO TÁC 2: In thẻ nhân viên này */}
+              {onOpenPrintDialog && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetEmp = actionMenuState.emp;
+                    setActionMenuState(null);
+                    onOpenPrintDialog([targetEmp.id]);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-slate-50 hover:text-slate-900 cursor-pointer transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="font-medium">In thẻ nhân viên này</span>
+                </button>
+              )}
+
+              {/* THAO TÁC 3: Chấm dứt hợp đồng (chỉ hiển thị khi hợp đồng chưa chấm dứt) */}
+              {onUpdateEmployee && !isContractTerminated(actionMenuState.emp) && (
+                <div className="pt-1 mt-1 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetEmp = actionMenuState.emp;
+                      setActionMenuState(null);
+                      setTerminatingEmployee(targetEmp);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-red-600 hover:bg-red-50 hover:text-red-700 cursor-pointer transition-colors group font-semibold"
+                  >
+                    <div className="p-1 rounded-md bg-red-100 text-red-600 group-hover:bg-red-600 group-hover:text-white transition-colors">
+                      <FileX className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Chấm dứt hợp đồng</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Cửa sổ Tạo & In Hợp Đồng */}
       <ErrorBoundary

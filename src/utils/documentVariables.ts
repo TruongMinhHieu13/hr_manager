@@ -58,7 +58,8 @@ export const SYSTEM_VARIABLES: VariableDefinition[] = [
 
   // 3. HỢP ĐỒNG & LƯƠNG
   { code: '#Số hợp đồng#', label: 'Số hợp đồng lao động', example: '001/HĐLĐ-2025', category: 'Hợp đồng & Lương' },
-  { code: '#Loại HĐ#', label: 'Loại hợp đồng', example: 'HĐTV / HĐXĐTH', category: 'Hợp đồng & Lương' },
+  { code: '#Loại HĐ#', label: 'Loại hợp đồng (Mã viết tắt)', example: 'HĐTV / HĐXĐTH', category: 'Hợp đồng & Lương' },
+  { code: '#Loại HĐ đầy đủ#', label: 'Tên loại hợp đồng đầy đủ', example: 'Hợp đồng xác định thời hạn', category: 'Hợp đồng & Lương' },
   { code: '#Thời hạn#', label: 'Thời hạn hợp đồng', example: '60 ngày / 12 tháng', category: 'Hợp đồng & Lương' },
   { code: '#Từ ngày#', label: 'Ngày bắt đầu hợp đồng', example: '01/01/2025', category: 'Hợp đồng & Lương' },
   { code: '#Đến ngày#', label: 'Ngày kết thúc hợp đồng', example: '31/12/2025', category: 'Hợp đồng & Lương' },
@@ -80,6 +81,8 @@ export const SYSTEM_VARIABLES: VariableDefinition[] = [
   { code: '#Tháng#', label: 'Tháng hiện tại (2 chữ số)', example: '11', category: 'Thời gian & Văn bản' },
   { code: '#Năm#', label: 'Năm hiện tại (4 chữ số)', example: '2026', category: 'Thời gian & Văn bản' },
   { code: '#Số quyết định#', label: 'Mẫu số quyết định chuẩn', example: '90993/QĐ-VSDN', category: 'Thời gian & Văn bản' },
+  { code: '#Ngày nghỉ việc#', label: 'Ngày nghỉ việc / hiệu lực QĐ', example: '24/10/2026', category: 'Thời gian & Văn bản' },
+  { code: '#Lý do nghỉ việc#', label: 'Lý do chấm dứt hợp đồng', example: 'Duyệt theo đơn', category: 'Thời gian & Văn bản' },
 ];
 
 /**
@@ -135,6 +138,23 @@ function formatMoneyVnd(val?: string): string {
     return Number(cleanDigits).toLocaleString('vi-VN');
   }
   return str.replace(/\s*(đ|đồng|vnđ|vnd)\s*$/gi, '').trim();
+}
+
+function formatFullContractType(loaiHd?: string): string {
+  const raw = (loaiHd || '').trim();
+  if (!raw) return '';
+  const upper = raw.toUpperCase();
+  const map: Record<string, string> = {
+    'HĐTV': 'Hợp đồng thử việc',
+    'HDTV': 'Hợp đồng thử việc',
+    'HĐXĐTH': 'Hợp đồng xác định thời hạn',
+    'HDXDTH': 'Hợp đồng xác định thời hạn',
+    'HĐĐT': 'Hợp đồng đào tạo',
+    'HDDT': 'Hợp đồng đào tạo',
+    'HĐKXĐTH': 'Hợp đồng không xác định thời hạn',
+    'HDKXDTH': 'Hợp đồng không xác định thời hạn',
+  };
+  return map[upper] || raw;
 }
 
 /**
@@ -267,6 +287,7 @@ export function buildEmployeeReplacements(
     '#Số hợp đồng#': contractNumVal,
     '#Số HĐ#': contractNumVal,
     '#Loại HĐ#': emp.loaiHd || '',
+    '#Loại HĐ đầy đủ#': formatFullContractType(emp.loaiHd),
     '#Thời hạn#': lowerThoiHan,
     '#Thời hạn HĐ#': lowerThoiHan,
     '#Thời hạn hợp đồng#': lowerThoiHan,

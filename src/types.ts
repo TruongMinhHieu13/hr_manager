@@ -98,6 +98,9 @@ export interface ContractRecord {
   ownerId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+  photoUrl?: string;
+  employeeStatus?: string;
+  isSigned?: boolean;
 }
 
 export interface RenewContractPayload {
@@ -283,13 +286,15 @@ export type ActiveTab =
   | 'birthdays'
   | 'probation_contracts'
   | 'training_contracts'
+  | 'created_contracts'
   | 'resignation'
   | 'document_templates'
   | 'face_crop'
   | 'designer'
   | 'print'
   | 'history'
-  | 'settings';
+  | 'settings'
+  | 'ai_rules';
 
 export type ResignationType = 'tu_xin_nghi' | 'cong_ty_cho_thoi_viec' | 'bo_viec' | 'het_hop_dong' | 'rut_ho_so' | 'khac';
 export type RehireEligibility = 'eligible' | 'consider' | 'ineligible' | 'restricted';

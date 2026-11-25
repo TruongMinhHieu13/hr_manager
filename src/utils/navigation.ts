@@ -13,6 +13,7 @@ export const TAB_TO_PATH: Record<ActiveTab, string> = {
   birthdays: '/birthdays',
   probation_contracts: '/probation-contracts',
   training_contracts: '/training-contracts',
+  created_contracts: '/created-contracts',
   resignation: '/resignation',
   document_templates: '/document-templates',
   face_crop: '/face-crop',
@@ -20,6 +21,7 @@ export const TAB_TO_PATH: Record<ActiveTab, string> = {
   print: '/print',
   history: '/history',
   settings: '/settings',
+  ai_rules: '/ai-rules',
 };
 
 export const TAB_TITLES: Record<ActiveTab, string> = {
@@ -30,6 +32,7 @@ export const TAB_TITLES: Record<ActiveTab, string> = {
   birthdays: 'Sinh nhật trong tháng - VietSun HRM',
   probation_contracts: 'Hợp đồng thử việc (HĐTV) - VietSun HRM',
   training_contracts: 'Hợp đồng đào tạo nghề (HĐĐT) - VietSun HRM',
+  created_contracts: 'Hợp đồng đã tạo - VietSun HRM',
   resignation: 'Nhân sự nghỉ việc - VietSun HRM',
   document_templates: 'Mẫu văn bản - VietSun HRM',
   face_crop: 'Cắt ảnh thẻ & Tách nền - VietSun HRM',
@@ -37,6 +40,7 @@ export const TAB_TITLES: Record<ActiveTab, string> = {
   print: 'In thẻ nhân viên - VietSun HRM',
   history: 'Lịch sử in & Import - VietSun HRM',
   settings: 'Cài đặt hệ thống - VietSun HRM',
+  ai_rules: 'Quy tắc AI Code - VietSun HRM',
 };
 
 // Bản đồ ánh xạ tất cả slug (tiếng Anh, tiếng Việt, gạch dưới, gạch ngang) sang ActiveTab
@@ -89,6 +93,13 @@ const SLUG_TO_TAB_MAP: Record<string, ActiveTab> = {
   hopdongdaotao: 'training_contracts',
   hddt: 'training_contracts',
 
+  // Created contracts
+  'created-contracts': 'created_contracts',
+  created_contracts: 'created_contracts',
+  'hop-dong-da-tao': 'created_contracts',
+  hopdongdatao: 'created_contracts',
+  contracts: 'created_contracts',
+
   // Resignation & Work History
   resignation: 'resignation',
   'nghi-viec': 'resignation',
@@ -137,6 +148,15 @@ const SLUG_TO_TAB_MAP: Record<string, ActiveTab> = {
   'cai-dat': 'settings',
   caidat: 'settings',
   'thiet-lap': 'settings',
+
+  // AI Rules
+  'ai-rules': 'ai_rules',
+  ai_rules: 'ai_rules',
+  airules: 'ai_rules',
+  'quy-tac-ai': 'ai_rules',
+  quytacai: 'ai_rules',
+  'quy-tac-code': 'ai_rules',
+  quytaccode: 'ai_rules',
 };
 
 /**

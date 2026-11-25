@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   FileText,
   Search,
@@ -33,8 +33,9 @@ import {
   FileSignature,
   XCircle,
   FileCheck,
+  RefreshCw,
 } from 'lucide-react';
-import { Division, Department, SubDepartment, Employee } from '../types';
+import { Division, Department, SubDepartment, Employee, ContractRecord } from '../types';
 import { api } from '../api';
 import { DocumentGeneratorModal } from './DocumentGeneratorModal';
 import { TerminateContractModal } from './TerminateContractModal';
@@ -44,6 +45,49 @@ import { RenewContractModal } from './RenewContractModal';
 import { NotificationModal, NotificationStat } from './NotificationModal';
 import { ErrorBoundary } from './ErrorBoundary';
 import { isContractTerminated } from '../utils/employeeUtils';
+
+function parseDateTimestamp(dateStr?: unknown): number {
+  if (!dateStr) return -1;
+  const s = String(dateStr).trim();
+  if (!s) return -1;
+  const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (dmy) {
+    const d = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    return Number.isNaN(d.getTime()) ? -1 : d.getTime();
+  }
+  const ymd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (ymd) {
+    const d = new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+    return Number.isNaN(d.getTime()) ? -1 : d.getTime();
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? -1 : parsed.getTime();
+}
+
+function parseContractNumberValue(contractNumber?: string): number {
+  if (!contractNumber) return -1;
+  const match = String(contractNumber).match(/(\d+)/);
+  if (!match) return -1;
+  const num = parseInt(match[1], 10);
+  return Number.isNaN(num) ? -1 : num;
+}
+
+function getStatusBadgeClass(status?: string): string {
+  switch (status) {
+    case 'Hiệu lực':
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'Đã tái ký':
+      return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'Đã thay thế':
+      return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+    case 'Hết hiệu lực':
+      return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'Đã chấm dứt':
+      return 'bg-rose-50 text-rose-700 border-rose-200';
+    default:
+      return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+}
 
 interface ContractManagementViewProps {
   employees: Employee[];
@@ -70,25 +114,48 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 }) => {
   const isTraining = contractType === 'training';
 
+  // Contracts state (quản lý theo danh sách hợp đồng)
+  const [contracts, setContracts] = useState<ContractRecord[]>([]);
+  const [isLoadingContracts, setIsLoadingContracts] = useState<boolean>(true);
+  const [contractsError, setContractsError] = useState<string | null>(null);
+
+  const loadContracts = useCallback(async () => {
+    setIsLoadingContracts(true);
+    setContractsError(null);
+    try {
+      const list = await api.getContracts();
+      setContracts(list);
+    } catch (err: unknown) {
+      setContractsError(err instanceof Error ? err.message : 'Không thể tải danh sách hợp đồng');
+    } finally {
+      setIsLoadingContracts(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
+
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [salaryFilter, setSalaryFilter] = useState<'all' | 'has_salary' | 'no_salary'>('all');
-  const [signingFilter, setSigningFilter] = useState<'all' | 'signed' | 'unsigned'>('all');
+  const [signingFilter, setSigningFilter] = useState<'all' | 'signed' | 'unsigned'>('signed');
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(10);
+  const [pageSize, setPageSize] = useState<number>(20);
 
-  // Selected employees for batch actions
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<Set<string>>(new Set());
+  // Selected contracts for batch actions
+  const [selectedContractIds, setSelectedContractIds] = useState<Set<string>>(new Set());
 
-  // Inline salary editing states: map employeeId -> draft salary string
+  // Inline salary editing states (kept for compatibility)
   const [salaryDrafts, setSalaryDrafts] = useState<Record<string, string>>({});
   const [savingSalaryIds, setSavingSalaryIds] = useState<Set<string>>(new Set());
   const [savedSuccessIds, setSavedSuccessIds] = useState<Set<string>>(new Set());
 
-  // Modal Nhập Lương + Bậc + Ngạch cho 1 nhân viên (theo yêu cầu)
-  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  // Modal Nhập Lương + Bậc + Ngạch cho 1 hợp đồng
+  const [editingContract, setEditingContract] = useState<ContractRecord | null>(null);
   const [modalSalary, setModalSalary] = useState('');
   const [modalBac, setModalBac] = useState('');
   const [modalNgach, setModalNgach] = useState('');
@@ -106,7 +173,13 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
   const [generatorTargetEmployees, setGeneratorTargetEmployees] = useState<Employee[]>([]);
 
   // Action Menu (3-dots) State
-  const [openActionMenuEmpId, setOpenActionMenuEmpId] = useState<string | null>(null);
+  const [actionMenuState, setActionMenuState] = useState<{
+    contract: ContractRecord;
+    top: number;
+    bottom: number;
+    right: number;
+    openUpwards: boolean;
+  } | null>(null);
 
   // Modal Lịch sử hợp đồng & Tái ký hợp đồng
   const [viewingHistoryEmployee, setViewingHistoryEmployee] = useState<Employee | null>(null);
@@ -133,24 +206,88 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
   });
 
   // Modal Chấm dứt hợp đồng
-  const [terminatingEmployee, setTerminatingEmployee] = useState<Employee | null>(null);
+  const [terminatingTarget, setTerminatingTarget] = useState<{
+    employee: Employee;
+    contract?: ContractRecord;
+  } | null>(null);
+
+  const employeeMap = useMemo(() => {
+    const map = new Map<string, Employee>();
+    for (const emp of employees) {
+      map.set(emp.id, emp);
+    }
+    return map;
+  }, [employees]);
+
+  const buildEmployeeForContract = useCallback(
+    (c: ContractRecord): Employee => {
+      const existing = employeeMap.get(c.employeeId);
+      if (existing) {
+        return {
+          ...existing,
+          soHd: c.contractNumber || existing.soHd,
+          loaiHd: c.contractType || existing.loaiHd,
+          thoiHan: c.duration || existing.thoiHan,
+          tuNgay: c.startDate || existing.tuNgay,
+          denNgay: c.endDate ?? existing.denNgay,
+          luongChinhThuc: c.salary || existing.luongChinhThuc,
+          luongThuViec: c.probationSalary || existing.luongThuViec,
+          bacLuong: c.bacLuong || existing.bacLuong,
+          ngachLuong: c.ngachLuong || existing.ngachLuong,
+          ngayKyHopDong: c.signDate || existing.ngayKyHopDong,
+          daKyHopDong: c.isSigned ?? existing.daKyHopDong,
+        };
+      }
+      return {
+        id: c.employeeId,
+        msnv: c.msnv || '',
+        fullName: c.fullName || '',
+        department: c.department || '',
+        chucVu: c.position || '',
+        soHd: c.contractNumber || '',
+        loaiHd: c.contractType || (isTraining ? 'HĐĐT' : 'HĐTV'),
+        thoiHan: c.duration || '',
+        tuNgay: c.startDate || '',
+        denNgay: c.endDate || '',
+        luongChinhThuc: c.salary || '',
+        luongThuViec: c.probationSalary || '',
+        bacLuong: c.bacLuong || '',
+        ngachLuong: c.ngachLuong || '',
+        ngayKyHopDong: c.signDate || '',
+        daKyHopDong: Boolean(c.isSigned),
+        joinDate: c.startDate || '',
+        photoUrl: c.photoUrl || '',
+        printCount: 0,
+        lastPrintedAt: '',
+        ownerId: c.ownerId || '',
+      };
+    },
+    [employeeMap, isTraining]
+  );
 
   const handleTerminateContract = async (updates: {
     tinhTrang: string;
     trangThaiHopDong: string;
     denNgay?: string;
   }) => {
-    if (!terminatingEmployee) return;
+    if (!terminatingTarget) return;
     try {
-      await onUpdateEmployee(terminatingEmployee.id, updates);
-      setTerminatingEmployee(null);
+      await onUpdateEmployee(terminatingTarget.employee.id, updates);
+      if (terminatingTarget.contract && !terminatingTarget.contract.id.startsWith('emp_ctr_')) {
+        await api.updateContract(terminatingTarget.contract.id, {
+          status: 'Đã chấm dứt',
+          endDate: updates.denNgay ?? terminatingTarget.contract.endDate ?? '',
+        });
+      }
+      await loadContracts();
+      setTerminatingTarget(null);
     } catch (err) {
       console.error('Lỗi khi chấm dứt hợp đồng:', err);
       throw err;
     }
   };
 
-  // 1. Filter danh sách HĐTV hoặc HĐĐT (chỉ lấy nhân sự đang làm việc, loại bỏ đã nghỉ)
+  // 1. Filter danh sách nhân viên HĐTV/HĐĐT (dùng cho modal Import Excel Lương)
   const contractEmployees = useMemo(() => {
     return employees.filter((emp) => {
       if (isContractTerminated(emp)) return false;
@@ -162,74 +299,124 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     });
   }, [employees, isTraining]);
 
+  // 2. Filter danh sách hợp đồng theo loại (HĐTV hoặc HĐĐT)
+  const typeContracts = useMemo(() => {
+    return contracts.filter((c) => {
+      const loai = (c.contractType || '').trim().toUpperCase();
+      if (isTraining) {
+        return loai === 'HĐĐT' || loai === 'HDDT' || loai.includes('ĐÀO TẠO') || loai.includes('DAO TAO');
+      }
+      return loai === 'HĐTV' || loai.includes('THỬ VIỆC') || loai.includes('THU VIEC');
+    });
+  }, [contracts, isTraining]);
+
   // Bộ lọc phòng ban theo Khối đã chọn
   const filteredDepartments = useMemo(() => {
     if (selectedDivision === 'all') return departments;
     return departments.filter((d) => d.divisionName === selectedDivision || d.divisionId === selectedDivision);
   }, [departments, selectedDivision]);
 
-  // Danh sách nhân viên hiển thị theo Bộ lọc
-  const displayedEmployees = useMemo(() => {
-    return contractEmployees.filter((emp) => {
+  // Danh sách hợp đồng hiển thị theo Bộ lọc & sắp xếp mới ký nhất lên đầu
+  const displayedContracts = useMemo(() => {
+    const filtered = typeContracts.filter((c) => {
+      const emp = employeeMap.get(c.employeeId);
+
       // 1. Tìm kiếm theo từ khóa
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = (emp.fullName || '').toLowerCase().includes(q);
-        const matchMsnv = (emp.msnv || '').toLowerCase().includes(q);
-        const matchDept = (emp.department || emp.phongBan || '').toLowerCase().includes(q);
-        const matchJob = (emp.chucVu || emp.congViec || '').toLowerCase().includes(q);
-        const matchPhone = (emp.soDienThoai || '').toLowerCase().includes(q);
-        if (!matchName && !matchMsnv && !matchDept && !matchJob && !matchPhone) {
+        const haystack = [
+          c.contractNumber,
+          c.fullName,
+          c.msnv,
+          c.department,
+          emp?.phongBan,
+          emp?.department,
+          c.position,
+          emp?.chucVu,
+          emp?.congViec,
+          emp?.soDienThoai,
+          c.note,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(q)) {
           return false;
         }
       }
 
       // 2. Lọc theo Khối
       if (selectedDivision !== 'all') {
-        if (emp.khoi !== selectedDivision) return false;
+        if ((emp?.khoi || '') !== selectedDivision) return false;
       }
 
       // 3. Lọc theo Phòng ban
       if (selectedDepartment !== 'all') {
-        const dName = emp.phongBan || emp.department || '';
+        const dName = emp?.phongBan || emp?.department || c.department || '';
         if (dName !== selectedDepartment) return false;
       }
 
-      // 4. Lọc theo Trạng thái lương
-      if (salaryFilter === 'has_salary') {
-        const salary = (emp.luongThuViec || '').trim();
-        if (!salary) return false;
-      } else if (salaryFilter === 'no_salary') {
-        const salary = (emp.luongThuViec || '').trim();
-        if (salary) return false;
+      // 4. Lọc theo Trạng thái hợp đồng
+      if (statusFilter !== 'all') {
+        if (c.status !== statusFilter) return false;
       }
 
-      // 5. Lọc theo Trạng thái ký hợp đồng
+      // 5. Lọc theo Trạng thái lương
+      const salaryVal = (c.probationSalary || c.salary || '').trim();
+      if (salaryFilter === 'has_salary') {
+        if (!salaryVal) return false;
+      } else if (salaryFilter === 'no_salary') {
+        if (salaryVal) return false;
+      }
+
+      // 6. Lọc theo Trạng thái ký hợp đồng
       if (signingFilter === 'signed') {
-        if (!emp.daKyHopDong) return false;
+        if (!c.isSigned) return false;
       } else if (signingFilter === 'unsigned') {
-        if (emp.daKyHopDong) return false;
+        if (c.isSigned) return false;
       }
 
       return true;
     });
+
+    return [...filtered].sort((a, b) => {
+      const isLegacyA = a.id.startsWith('emp_ctr_') ? 1 : 0;
+      const isLegacyB = b.id.startsWith('emp_ctr_') ? 1 : 0;
+      if (isLegacyA !== isLegacyB) return isLegacyA - isLegacyB;
+
+      const createdA = parseDateTimestamp(a.createdAt || a.updatedAt);
+      const createdB = parseDateTimestamp(b.createdAt || b.updatedAt);
+      if (createdB !== createdA) return createdB - createdA;
+
+      const signDateA = parseDateTimestamp(a.signDate);
+      const signDateB = parseDateTimestamp(b.signDate);
+      if (signDateB !== signDateA) return signDateB - signDateA;
+
+      const numA = parseContractNumberValue(a.contractNumber);
+      const numB = parseContractNumberValue(b.contractNumber);
+      if (numB !== numA) return numB - numA;
+
+      return String(b.contractNumber || '').localeCompare(String(a.contractNumber || ''), 'vi');
+    });
   }, [
-    contractEmployees,
+    typeContracts,
+    employeeMap,
     searchQuery,
     selectedDivision,
     selectedDepartment,
+    statusFilter,
     salaryFilter,
     signingFilter,
   ]);
 
   // Phân trang
-  const totalPages = Math.max(1, Math.ceil(displayedEmployees.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(displayedContracts.length / pageSize));
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
 
-  const paginatedEmployees = useMemo(() => {
+  const paginatedContracts = useMemo(() => {
     const startIdx = (safeCurrentPage - 1) * pageSize;
-    return displayedEmployees.slice(startIdx, startIdx + pageSize);
-  }, [displayedEmployees, safeCurrentPage, pageSize]);
+    return displayedContracts.slice(startIdx, startIdx + pageSize);
+  }, [displayedContracts, safeCurrentPage, pageSize]);
 
   const visiblePageNumbers = useMemo(() => {
     const pages: (number | 'ellipsis-start' | 'ellipsis-end')[] = [];
@@ -253,21 +440,21 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     return pages;
   }, [totalPages, safeCurrentPage]);
 
-  // Thống kê nhanh cho Hợp đồng (Bao gồm số lượng đã ký / chưa ký)
+  // Thống kê nhanh cho Hợp đồng
   const contractStats = useMemo(() => {
-    const total = contractEmployees.length;
+    const total = typeContracts.length;
     let withSalary = 0;
     let withoutSalary = 0;
     let signedCount = 0;
     let unsignedCount = 0;
 
-    contractEmployees.forEach((e) => {
-      if ((e.luongThuViec || '').trim()) {
+    typeContracts.forEach((c) => {
+      if ((c.probationSalary || c.salary || '').trim()) {
         withSalary++;
       } else {
         withoutSalary++;
       }
-      if (e.daKyHopDong) {
+      if (c.isSigned) {
         signedCount++;
       } else {
         unsignedCount++;
@@ -275,7 +462,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     });
 
     return { total, withSalary, withoutSalary, signedCount, unsignedCount };
-  }, [contractEmployees]);
+  }, [typeContracts]);
 
   // Format số tiền VND hiển thị
   const formatSalaryDisplay = (val?: string) => {
@@ -421,18 +608,18 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     }
   };
 
-  // Chọn / bỏ chọn tất cả
+  // Chọn / bỏ chọn tất cả hợp đồng đang lọc
   const handleToggleSelectAll = () => {
-    if (selectedEmployeeIds.size === displayedEmployees.length) {
-      setSelectedEmployeeIds(new Set());
+    if (selectedContractIds.size === displayedContracts.length) {
+      setSelectedContractIds(new Set());
     } else {
-      setSelectedEmployeeIds(new Set(displayedEmployees.map((e) => e.id)));
+      setSelectedContractIds(new Set(displayedContracts.map((c) => c.id)));
     }
   };
 
-  // Chọn / bỏ chọn từng người
+  // Chọn / bỏ chọn từng hợp đồng
   const handleToggleSelect = (id: string) => {
-    setSelectedEmployeeIds((prev) => {
+    setSelectedContractIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -440,37 +627,58 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     });
   };
 
-  // Mở modal nhập Lương + Bậc + Ngạch cho 1 nhân viên
-  const handleOpenSalaryModal = (emp: Employee) => {
-    setEditingEmployee(emp);
-    const rawSalary = (emp.luongThuViec || '').trim();
-    // Bỏ chữ 'đ', định dạng số thành dạng dấu phẩy (VD: 5,900,000) để người dùng dễ nhìn và xóa sửa
+  // Mở modal nhập Lương + Bậc + Ngạch cho 1 hợp đồng
+  const handleOpenSalaryModal = (contract: ContractRecord) => {
+    setEditingContract(contract);
+    const rawSalary = (contract.probationSalary || contract.salary || '').trim();
     if (rawSalary && !rawSalary.includes('%')) {
       const cleanDigits = rawSalary.replace(/\D/g, '');
       setModalSalary(cleanDigits ? Number(cleanDigits).toLocaleString('en-US') : '');
     } else {
       setModalSalary(rawSalary);
     }
-    setModalBac(emp.bacLuong || '');
-    setModalNgach(emp.ngachLuong || '');
+    setModalBac(contract.bacLuong || '');
+    setModalNgach(contract.ngachLuong || '');
   };
 
   // Lưu thông tin Lương + Bậc + Ngạch từ modal
   const handleSaveSalaryModal = async () => {
-    if (!editingEmployee) return;
+    if (!editingContract) return;
     setIsSavingSalaryModal(true);
     try {
       const trimmed = modalSalary.trim();
-      // Nếu xóa trống thì lưu rỗng, nếu có số thì format đẹp
       const finalSalary = trimmed ? (formatSalaryDisplay(trimmed) || trimmed) : '';
-      const payload = {
-        luongThuViec: finalSalary,
-        bacLuong: modalBac.trim(),
-        ngachLuong: modalNgach.trim(),
-      };
-      await api.updateProbationSalary(editingEmployee.id, payload);
-      await onUpdateEmployee(editingEmployee.id, payload);
-      setEditingEmployee(null);
+      const bac = modalBac.trim();
+      const ngach = modalNgach.trim();
+
+      const res = await api.updateContract(editingContract.id, {
+        probationSalary: finalSalary,
+        bacLuong: bac,
+        ngachLuong: ngach,
+      });
+
+      if (editingContract.status === 'Hiệu lực' && editingContract.employeeId) {
+        await api.updateProbationSalary(editingContract.employeeId, {
+          luongThuViec: finalSalary,
+          bacLuong: bac,
+          ngachLuong: ngach,
+        }, undefined);
+        await onUpdateEmployee(editingContract.employeeId, {
+          luongThuViec: finalSalary,
+          bacLuong: bac,
+          ngachLuong: ngach,
+        });
+      }
+
+      setContracts((prev) =>
+        prev.map((item) =>
+          item.id === editingContract.id
+            ? { ...item, ...res.contract, probationSalary: finalSalary, bacLuong: bac, ngachLuong: ngach }
+            : item
+        )
+      );
+      await loadContracts();
+      setEditingContract(null);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Lỗi cập nhật Lương, Bậc, Ngạch');
     } finally {
@@ -478,7 +686,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     }
   };
 
-  // Áp dụng lương thử việc hàng loạt
+  // Áp dụng lương thử việc hàng loạt cho các hợp đồng đã chọn
   const handleBatchApplySalary = async () => {
     if (!batchSalaryValue.trim() && !batchBacValue.trim() && !batchNgachValue.trim()) {
       setNotification({
@@ -490,13 +698,13 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
       });
       return;
     }
-    const ids = Array.from(selectedEmployeeIds);
-    if (ids.length === 0) {
+    const selectedList = typeContracts.filter((c) => selectedContractIds.has(c.id));
+    if (selectedList.length === 0) {
       setNotification({
         isOpen: true,
         type: 'warning',
-        title: 'Chưa chọn nhân sự',
-        message: 'Vui lòng tích chọn ít nhất 1 nhân viên để áp dụng hàng loạt.',
+        title: 'Chưa chọn hợp đồng',
+        message: 'Vui lòng tích chọn ít nhất 1 hợp đồng để áp dụng hàng loạt.',
         confirmText: 'Đã hiểu',
       });
       return;
@@ -504,15 +712,29 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
     setIsBatchSaving(true);
     try {
-      const payload: { luongThuViec?: string; bacLuong?: string; ngachLuong?: string } = {};
-      if (batchSalaryValue.trim()) payload.luongThuViec = formatSalaryDisplay(batchSalaryValue.trim()) || batchSalaryValue.trim();
-      if (batchBacValue.trim()) payload.bacLuong = batchBacValue.trim();
-      if (batchNgachValue.trim()) payload.ngachLuong = batchNgachValue.trim();
+      const formattedSalary = batchSalaryValue.trim()
+        ? formatSalaryDisplay(batchSalaryValue.trim()) || batchSalaryValue.trim()
+        : undefined;
+      const bac = batchBacValue.trim() || undefined;
+      const ngach = batchNgachValue.trim() || undefined;
 
-      for (const id of ids) {
-        await api.updateProbationSalary(id, payload);
-        await onUpdateEmployee(id, payload);
+      for (const c of selectedList) {
+        const contractPayload: Partial<ContractRecord> = {};
+        if (formattedSalary !== undefined) contractPayload.probationSalary = formattedSalary;
+        if (bac !== undefined) contractPayload.bacLuong = bac;
+        if (ngach !== undefined) contractPayload.ngachLuong = ngach;
+        await api.updateContract(c.id, contractPayload);
+
+        if (c.status === 'Hiệu lực' && c.employeeId) {
+          const empPayload: { luongThuViec?: string; bacLuong?: string; ngachLuong?: string } = {};
+          if (formattedSalary !== undefined) empPayload.luongThuViec = formattedSalary;
+          if (bac !== undefined) empPayload.bacLuong = bac;
+          if (ngach !== undefined) empPayload.ngachLuong = ngach;
+          await api.updateProbationSalary(c.employeeId, empPayload, undefined);
+          await onUpdateEmployee(c.employeeId, empPayload);
+        }
       }
+      await loadContracts();
       setIsBatchSalaryModalOpen(false);
       setBatchSalaryValue('');
       setBatchBacValue('');
@@ -522,11 +744,11 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
         isOpen: true,
         type: 'success',
         title: 'Áp dụng hàng loạt thành công!',
-        message: `Đã cập nhật Lương, Bậc, Ngạch cho ${ids.length} nhân viên được chọn.`,
+        message: `Đã cập nhật Lương, Bậc, Ngạch cho ${selectedList.length} hợp đồng được chọn.`,
         stats: [
           {
-            label: 'Nhân viên cập nhật',
-            value: ids.length,
+            label: 'Hợp đồng cập nhật',
+            value: selectedList.length,
             sublabel: 'Áp dụng thành công',
             color: 'emerald',
           },
@@ -547,31 +769,37 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     }
   };
 
-  // Cập nhật trạng thái Đã ký / Chưa ký hợp đồng cho 1 nhân viên
-  const handleToggleSigned = async (emp: Employee, isSigned: boolean) => {
+  // Cập nhật trạng thái Đã ký / Chưa ký hợp đồng cho 1 hợp đồng
+  const handleToggleSigned = async (contract: ContractRecord, isSigned: boolean) => {
     try {
       const today = new Date().toLocaleDateString('vi-VN');
-      const signDate = isSigned ? (emp.tuNgay || today) : '';
-      const res = await api.toggleContractSigned({
-        employeeIds: [emp.id],
-        isSigned,
-        signDate,
-      });
+      const signDate = isSigned ? (contract.signDate || contract.startDate || today) : '';
 
-      if (onUpdateEmployee) {
-        await onUpdateEmployee(emp.id, {
-          daKyHopDong: isSigned,
-          ngayKyHopDong: signDate,
+      if (contract.id.startsWith('emp_ctr_')) {
+        await api.toggleContractSigned({
+          employeeIds: [contract.employeeId],
+          isSigned,
+          signDate,
         });
+      } else {
+        await api.updateContract(contract.id, { signDate });
+        if (contract.status === 'Hiệu lực' && contract.employeeId) {
+          await api.toggleContractSigned({
+            employeeIds: [contract.employeeId],
+            isSigned,
+            signDate,
+          });
+        }
       }
 
+      await loadContracts();
       if (onRefreshData) onRefreshData();
 
       setNotification({
         isOpen: true,
         type: 'success',
         title: isSigned ? 'Đã xác nhận ký hợp đồng' : 'Đã chuyển về chưa ký',
-        message: `Nhân viên ${emp.fullName} (${emp.msnv}) đã được cập nhật trạng thái: ${
+        message: `Hợp đồng ${contract.contractNumber ? `#${contract.contractNumber} ` : ''}của ${contract.fullName || ''} (${contract.msnv || ''}) đã được cập nhật: ${
           isSigned ? 'ĐÃ KÝ HỢP ĐỒNG' : 'CHƯA KÝ HỢP ĐỒNG'
         }.`,
         confirmText: 'Đã hiểu',
@@ -581,33 +809,47 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     }
   };
 
-  // Đánh dấu Đã ký / Chưa ký cho nhiều nhân viên đang chọn
+  // Đánh dấu Đã ký / Chưa ký cho nhiều hợp đồng đang chọn
   const handleBatchToggleSigned = async (isSigned: boolean) => {
-    if (selectedEmployeeIds.size === 0) return;
+    const selectedList = typeContracts.filter((c) => selectedContractIds.has(c.id));
+    if (selectedList.length === 0) return;
     try {
       const today = new Date().toLocaleDateString('vi-VN');
-      const targetIds = Array.from(selectedEmployeeIds);
-      const res = await api.toggleContractSigned({
-        employeeIds: targetIds,
-        isSigned,
-        signDate: today,
-      });
+      const empIdsForSync: string[] = [];
 
-      if (onBatchUpdateEmployees && res.updatedEmployees) {
-        const updatedMap = new Map(res.updatedEmployees.map((e) => [e.id, e]));
-        onBatchUpdateEmployees(
-          employees.map((e) => updatedMap.get(e.id) || e)
-        );
+      for (const c of selectedList) {
+        const signDate = isSigned ? (c.signDate || c.startDate || today) : '';
+        if (c.id.startsWith('emp_ctr_')) {
+          empIdsForSync.push(c.employeeId);
+        } else {
+          await api.updateContract(c.id, { signDate });
+          if (c.status === 'Hiệu lực' && c.employeeId) {
+            empIdsForSync.push(c.employeeId);
+          }
+        }
       }
 
+      if (empIdsForSync.length > 0) {
+        const res = await api.toggleContractSigned({
+          employeeIds: Array.from(new Set(empIdsForSync)),
+          isSigned,
+          signDate: today,
+        });
+        if (onBatchUpdateEmployees && res.updatedEmployees) {
+          const updatedMap = new Map(res.updatedEmployees.map((e) => [e.id, e]));
+          onBatchUpdateEmployees(employees.map((e) => updatedMap.get(e.id) || e));
+        }
+      }
+
+      await loadContracts();
       if (onRefreshData) onRefreshData();
-      setSelectedEmployeeIds(new Set());
+      setSelectedContractIds(new Set());
 
       setNotification({
         isOpen: true,
         type: 'success',
         title: 'Cập nhật trạng thái ký hàng loạt',
-        message: `Đã đánh dấu ${res.updatedEmployees.length} nhân viên là: ${
+        message: `Đã đánh dấu ${selectedList.length} hợp đồng là: ${
           isSigned ? 'ĐÃ KÝ HỢP ĐỒNG' : 'CHƯA KÝ HỢP ĐỒNG'
         }.`,
         confirmText: 'Đóng',
@@ -617,14 +859,14 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
     }
   };
 
-  // Mở modal tạo/in hợp đồng thử việc cho danh sách đã chọn
+  // Mở modal tạo/in hợp đồng cho danh sách đã chọn
   const handleOpenDocGenerator = (targetList: Employee[]) => {
     if (targetList.length === 0) {
       setNotification({
         isOpen: true,
         type: 'warning',
-        title: 'Chưa chọn nhân sự',
-        message: 'Vui lòng tích chọn ít nhất một nhân viên để tạo hoặc in hợp đồng.',
+        title: 'Chưa chọn hợp đồng',
+        message: 'Vui lòng tích chọn ít nhất một hợp đồng để tạo hoặc in văn bản.',
         confirmText: 'Đã hiểu',
       });
       return;
@@ -635,7 +877,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
   // Xuất file CSV / Excel danh sách Hợp đồng
   const handleExportCsv = () => {
-    const list = displayedEmployees;
+    const list = displayedContracts;
     if (list.length === 0) {
       alert('Không có dữ liệu để xuất file.');
       return;
@@ -643,14 +885,16 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
     const headers = [
       'STT',
+      'Số hợp đồng',
+      'Loại hợp đồng',
+      'Trạng thái HĐ',
+      'Tình trạng ký',
+      'Ngày ký',
       'Mã nhân viên',
       'Họ và tên',
       'Khối',
       'Phòng ban',
-      'Ký hiệu PB',
-      'Phòng ban con',
       'Chức vụ',
-      'Loại hợp đồng',
       'Thời hạn',
       'Từ ngày',
       'Đến ngày',
@@ -660,24 +904,30 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
       'Số điện thoại',
     ];
 
-    const rows = list.map((emp, idx) => [
-      idx + 1,
-      emp.msnv || '',
-      `"${(emp.fullName || '').replace(/"/g, '""')}"`,
-      `"${(emp.khoi || '').replace(/"/g, '""')}"`,
-      `"${(emp.phongBan || emp.department || '').replace(/"/g, '""')}"`,
-      emp.kyHieuPb || '',
-      `"${(emp.phongBanCon || emp.boPhan || '').replace(/"/g, '""')}"`,
-      `"${(emp.chucVu || '').replace(/"/g, '""')}"`,
-      emp.loaiHd || '',
-      emp.thoiHan || '',
-      emp.tuNgay || '',
-      emp.denNgay || '',
-      `"${formatSalaryDisplay(emp.luongThuViec).replace(/"/g, '""')}"`,
-      `"${(emp.bacLuong || '').replace(/"/g, '""')}"`,
-      `"${(emp.ngachLuong || '').replace(/"/g, '""')}"`,
-      emp.soDienThoai || '',
-    ]);
+    const rows = list.map((c, idx) => {
+      const emp = employeeMap.get(c.employeeId);
+      const salaryDisplay = formatSalaryDisplay(c.probationSalary || c.salary);
+      return [
+        idx + 1,
+        `"${(c.contractNumber || '').replace(/"/g, '""')}"`,
+        c.contractType || '',
+        c.status || '',
+        c.isSigned ? 'Đã ký' : 'Chưa ký',
+        c.signDate || '',
+        c.msnv || emp?.msnv || '',
+        `"${(c.fullName || emp?.fullName || '').replace(/"/g, '""')}"`,
+        `"${(emp?.khoi || '').replace(/"/g, '""')}"`,
+        `"${(c.department || emp?.phongBan || emp?.department || '').replace(/"/g, '""')}"`,
+        `"${(c.position || emp?.chucVu || '').replace(/"/g, '""')}"`,
+        c.duration || '',
+        c.startDate || '',
+        c.endDate || '',
+        `"${salaryDisplay.replace(/"/g, '""')}"`,
+        `"${(c.bacLuong || '').replace(/"/g, '""')}"`,
+        `"${(c.ngachLuong || '').replace(/"/g, '""')}"`,
+        emp?.soDienThoai || '',
+      ];
+    });
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -704,15 +954,15 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                {isTraining ? 'Quản Lý Hợp Đồng Đào Tạo' : 'Quản Lý Hợp Đồng Lao Động'}
+                {isTraining ? 'Quản Lý Hợp Đồng Đào Tạo' : 'Quản Lý Hợp Đồng Thử Việc'}
                 <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${isTraining ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-blue-100 text-blue-800 border border-blue-200'}`}>
-                  {isTraining ? 'Phân hệ HĐĐT' : 'Phân hệ HĐ'}
+                  {isTraining ? 'Phân hệ HĐĐT' : 'Phân hệ HĐTV'}
                 </span>
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
                 {isTraining
-                  ? 'Theo dõi tình trạng hợp đồng, quản lý Hợp đồng đào tạo (HĐĐT) và nhập lương / phụ cấp đào tạo cho nhân sự'
-                  : 'Theo dõi tình trạng hợp đồng, quản lý Hợp đồng thử việc (HĐTV) và nhập lương thử việc cho nhân sự'}
+                  ? 'Quản lý danh sách Hợp đồng đào tạo (HĐĐT), ưu tiên hiển thị hợp đồng vừa ký mới nhất lên đầu'
+                  : 'Quản lý danh sách Hợp đồng thử việc (HĐTV), ưu tiên hiển thị hợp đồng vừa ký mới nhất lên đầu'}
               </p>
             </div>
           </div>
@@ -720,6 +970,17 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
         {/* Nút thao tác nhanh trên Header */}
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={loadContracts}
+            disabled={isLoadingContracts}
+            className="px-3.5 py-2 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-2 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+            title="Tải lại danh sách hợp đồng"
+          >
+            <RefreshCw className={`w-4 h-4 text-slate-500 ${isLoadingContracts ? 'animate-spin' : ''}`} />
+            Làm mới
+          </button>
+
           <button
             type="button"
             onClick={handleExportCsv}
@@ -743,16 +1004,16 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
             Import Excel Lương / Bậc / Ngạch
           </button>
 
-          {selectedEmployeeIds.size > 0 && (
+          {selectedContractIds.size > 0 && (
             <>
               <button
                 type="button"
                 onClick={() => handleBatchToggleSigned(true)}
                 className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-                title="Đánh dấu toàn bộ nhân viên được chọn là đã ký hợp đồng"
+                title="Đánh dấu toàn bộ hợp đồng được chọn là đã ký"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                Đánh dấu đã ký ({selectedEmployeeIds.size})
+                Đánh dấu đã ký ({selectedContractIds.size})
               </button>
 
               <button
@@ -761,48 +1022,72 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                 className="px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-2 shadow-2xs transition-colors cursor-pointer"
               >
                 <DollarSign className="w-4 h-4" />
-                Nhập lương hàng loạt ({selectedEmployeeIds.size})
+                Nhập lương hàng loạt ({selectedContractIds.size})
               </button>
 
               <button
                 type="button"
                 onClick={() => {
-                  const selectedEmps = employees.filter((e) => selectedEmployeeIds.has(e.id));
-                  handleOpenDocGenerator(selectedEmps);
+                  const selectedTargets = typeContracts
+                    .filter((c) => selectedContractIds.has(c.id))
+                    .map((c) => buildEmployeeForContract(c));
+                  handleOpenDocGenerator(selectedTargets);
                 }}
                 className={`px-4 py-2 text-xs font-semibold rounded-xl ${isTraining ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'} text-white flex items-center gap-2 shadow-xs transition-colors cursor-pointer`}
               >
                 <Printer className="w-4 h-4" />
-                {isTraining ? 'Tạo / In HĐ Đào Tạo' : 'Tạo / In HĐ Thử Việc'} ({selectedEmployeeIds.size})
+                {isTraining ? 'Tạo / In HĐ Đào Tạo' : 'Tạo / In HĐ Thử Việc'} ({selectedContractIds.size})
               </button>
             </>
           )}
         </div>
       </div>
 
-      {/* 2. THẺ THỐNG KÊ KPI CHO HỢP ĐỒNG */}
+      {/* 2. THẺ THỐNG KÊ KPI CHO HỢP ĐỒNG (Bấm để lọc nhanh) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Tổng nhân viên */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs flex items-center gap-3.5">
+        {/* Card 1: Tổng hợp đồng */}
+        <button
+          type="button"
+          onClick={() => {
+            setSigningFilter('all');
+            setCurrentPage(1);
+          }}
+          className={`text-left bg-white rounded-2xl border p-4 shadow-2xs flex items-center gap-3.5 transition-all cursor-pointer ${
+            signingFilter === 'all'
+              ? 'border-blue-400 ring-2 ring-blue-500/20'
+              : 'border-slate-200/80 hover:border-slate-300'
+          }`}
+        >
           <div className={`w-11 h-11 rounded-xl ${isTraining ? 'bg-emerald-50 border border-emerald-200/60 text-emerald-600' : 'bg-blue-50 border border-blue-200/60 text-blue-600'} flex items-center justify-center shrink-0`}>
-            {isTraining ? <GraduationCap className="w-5 h-5" /> : <Users className="w-5 h-5" />}
+            {isTraining ? <GraduationCap className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
           </div>
           <div>
             <p className="text-xs font-medium text-slate-500">
-              {isTraining ? 'Tổng nhân viên đào tạo' : 'Tổng nhân viên thử việc'}
+              {isTraining ? 'Tổng hợp đồng đào tạo' : 'Tổng hợp đồng thử việc'}
             </p>
             <p className="text-2xl font-bold text-slate-900 mt-0.5">{contractStats.total}</p>
           </div>
-        </div>
+        </button>
 
-        {/* Card 2: Đã ký hợp đồng */}
-        <div className="bg-white rounded-2xl border border-emerald-200/90 p-4 shadow-2xs flex items-center gap-3.5 bg-emerald-50/30">
+        {/* Card 2: Đã ký hợp đồng (vừa ký) */}
+        <button
+          type="button"
+          onClick={() => {
+            setSigningFilter('signed');
+            setCurrentPage(1);
+          }}
+          className={`text-left rounded-2xl border p-4 shadow-2xs flex items-center gap-3.5 bg-emerald-50/40 transition-all cursor-pointer ${
+            signingFilter === 'signed'
+              ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+              : 'border-emerald-200/90 hover:border-emerald-300'
+          }`}
+        >
           <div className="w-11 h-11 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 shrink-0">
             <FileCheck className="w-5 h-5" />
           </div>
           <div>
             <p className="text-xs font-bold text-emerald-800">
-              Đã ký hợp đồng
+              Hợp đồng đã ký (mới nhất)
             </p>
             <div className="flex items-baseline gap-2 mt-0.5">
               <span className="text-2xl font-bold text-emerald-700">{contractStats.signedCount}</span>
@@ -811,10 +1096,21 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
               </span>
             </div>
           </div>
-        </div>
+        </button>
 
         {/* Card 3: Chưa ký hợp đồng */}
-        <div className="bg-white rounded-2xl border border-amber-200/90 p-4 shadow-2xs flex items-center gap-3.5 bg-amber-50/30">
+        <button
+          type="button"
+          onClick={() => {
+            setSigningFilter('unsigned');
+            setCurrentPage(1);
+          }}
+          className={`text-left rounded-2xl border p-4 shadow-2xs flex items-center gap-3.5 bg-amber-50/30 transition-all cursor-pointer ${
+            signingFilter === 'unsigned'
+              ? 'border-amber-500 ring-2 ring-amber-500/20'
+              : 'border-amber-200/90 hover:border-amber-300'
+          }`}
+        >
           <div className="w-11 h-11 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
             <FileSignature className="w-5 h-5" />
           </div>
@@ -827,10 +1123,21 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
               <span className="text-xs text-amber-600 font-medium">chờ ký</span>
             </div>
           </div>
-        </div>
+        </button>
 
         {/* Card 4: Đã nhập lương / phụ cấp */}
-        <div className="bg-white rounded-2xl border border-blue-200/90 p-4 shadow-2xs flex items-center gap-3.5 bg-blue-50/20">
+        <button
+          type="button"
+          onClick={() => {
+            setSalaryFilter((prev) => (prev === 'has_salary' ? 'all' : 'has_salary'));
+            setCurrentPage(1);
+          }}
+          className={`text-left rounded-2xl border p-4 shadow-2xs flex items-center gap-3.5 bg-blue-50/20 transition-all cursor-pointer ${
+            salaryFilter === 'has_salary'
+              ? 'border-blue-500 ring-2 ring-blue-500/20'
+              : 'border-blue-200/90 hover:border-blue-300'
+          }`}
+        >
           <div className="w-11 h-11 rounded-xl bg-blue-100/70 border border-blue-200 flex items-center justify-center text-blue-700 shrink-0">
             <CheckCircle2 className="w-5 h-5" />
           </div>
@@ -845,7 +1152,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
               </span>
             </div>
           </div>
-        </div>
+        </button>
       </div>
 
       {/* 4. THANH CÔNG CỤ TÌM KIẾM VÀ LỌC */}
@@ -855,7 +1162,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Tìm theo Tên, MSNV, chức vụ, SĐT..."
+            placeholder="Tìm theo Số HĐ, Tên, MSNV, phòng ban, chức vụ..."
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
@@ -866,7 +1173,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
         </div>
 
         {/* Lọc theo Khối */}
-        <div className="min-w-[160px]">
+        <div className="min-w-[150px]">
           <select
             value={selectedDivision}
             onChange={(e) => {
@@ -886,7 +1193,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
         </div>
 
         {/* Lọc theo Phòng ban */}
-        <div className="min-w-[180px]">
+        <div className="min-w-[170px]">
           <select
             value={selectedDepartment}
             onChange={(e) => {
@@ -906,23 +1213,41 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
         </div>
 
         {/* Lọc theo trạng thái ký hợp đồng */}
-        <div className="min-w-[170px]">
+        <div className="min-w-[190px]">
           <select
             value={signingFilter}
             onChange={(e) => {
               setSigningFilter(e.target.value as 'all' | 'signed' | 'unsigned');
               setCurrentPage(1);
             }}
-            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 bg-white"
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 bg-white font-semibold text-slate-700"
           >
-            <option value="all">Tất cả trạng thái ký ({contractStats.total})</option>
-            <option value="signed">✓ Đã ký hợp đồng ({contractStats.signedCount})</option>
+            <option value="signed">✓ Đã ký / Vừa ký ({contractStats.signedCount})</option>
+            <option value="all">Tất cả hợp đồng ({contractStats.total})</option>
             <option value="unsigned">⏳ Chưa ký hợp đồng ({contractStats.unsignedCount})</option>
           </select>
         </div>
 
+        {/* Lọc theo trạng thái hợp đồng */}
+        <div className="min-w-[140px]">
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 bg-white"
+          >
+            <option value="all">Mọi trạng thái</option>
+            <option value="Hiệu lực">Hiệu lực</option>
+            <option value="Đã tái ký">Đã tái ký</option>
+            <option value="Hết hiệu lực">Hết hiệu lực</option>
+            <option value="Đã chấm dứt">Đã chấm dứt</option>
+          </select>
+        </div>
+
         {/* Lọc theo trạng thái lương */}
-        <div className="min-w-[160px]">
+        <div className="min-w-[155px]">
           <select
             value={salaryFilter}
             onChange={(e) => {
@@ -941,11 +1266,11 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
           </select>
         </div>
 
-        {/* Nút tạo hợp đồng cho toàn bộ người trong bộ lọc */}
-        {displayedEmployees.length > 0 && (
+        {/* Nút tạo hợp đồng cho toàn bộ danh sách đang lọc */}
+        {displayedContracts.length > 0 && (
           <button
             type="button"
-            onClick={() => handleOpenDocGenerator(displayedEmployees)}
+            onClick={() => handleOpenDocGenerator(displayedContracts.map((c) => buildEmployeeForContract(c)))}
             className={`px-3.5 py-2 text-xs font-semibold rounded-xl border ${
               isTraining
                 ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
@@ -953,18 +1278,30 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
             } flex items-center gap-1.5 transition-colors cursor-pointer ml-auto`}
             title={
               isTraining
-                ? 'Mở cửa sổ tạo văn bản hợp đồng đào tạo cho toàn bộ danh sách đang hiển thị'
-                : 'Mở cửa sổ tạo văn bản hợp đồng thử việc cho toàn bộ danh sách đang hiển thị'
+                ? 'Mở cửa sổ tạo văn bản hợp đồng đào tạo cho toàn bộ hợp đồng đang hiển thị'
+                : 'Mở cửa sổ tạo văn bản hợp đồng thử việc cho toàn bộ hợp đồng đang hiển thị'
             }
           >
             <Sparkles className={`w-3.5 h-3.5 ${isTraining ? 'text-emerald-600' : 'text-blue-600'}`} />
-            Tạo HĐ cho tất cả ({displayedEmployees.length})
+            Tạo HĐ cho tất cả ({displayedContracts.length})
           </button>
         )}
       </div>
 
-      {/* 5. BẢNG DỮ LIỆU NHÂN VIÊN VÀ MỤC NHẬP LƯƠNG */}
+      {/* 5. BẢNG DANH SÁCH HỢP ĐỒNG */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        {contractsError && (
+          <div className="p-4 bg-rose-50 border-b border-rose-200 text-xs text-rose-700 flex items-center justify-between gap-3">
+            <span>{contractsError}</span>
+            <button
+              type="button"
+              onClick={loadContracts}
+              className="px-3 py-1 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700 cursor-pointer"
+            >
+              Thử lại
+            </button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -973,22 +1310,22 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                   <input
                     type="checkbox"
                     checked={
-                      displayedEmployees.length > 0 &&
-                      selectedEmployeeIds.size === displayedEmployees.length
+                      displayedContracts.length > 0 &&
+                      selectedContractIds.size === displayedContracts.length
                     }
                     onChange={handleToggleSelectAll}
                     className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
                 </th>
                 <th className="py-3 px-4 w-12 text-center">STT</th>
-                <th className="py-3 px-4 min-w-[180px]">Nhân viên</th>
-                <th className="py-3 px-4 min-w-[160px]">Chức vụ &amp; Công việc</th>
-                <th className="py-3 px-4 w-32">Loại HĐ &amp; Thời hạn</th>
-                <th className="py-3 px-4 min-w-[160px]">Trạng thái ký HĐ</th>
+                <th className="py-3 px-4 min-w-[165px]">Số HĐ &amp; Trạng thái</th>
+                <th className="py-3 px-4 min-w-[200px]">Nhân viên</th>
+                <th className="py-3 px-4 min-w-[150px]">Chức vụ &amp; Công việc</th>
+                <th className="py-3 px-4 min-w-[165px]">Tình trạng ký HĐ</th>
                 <th className="py-3 px-4 w-36">
                   {isTraining ? 'Thời gian đào tạo' : 'Thời gian thử việc'}
                 </th>
-                <th className="py-3 px-4 min-w-[260px]">
+                <th className="py-3 px-4 min-w-[240px]">
                   <div className="flex items-center gap-1.5 text-blue-700">
                     <DollarSign className="w-3.5 h-3.5" />
                     <span>Lương + Bậc + Ngạch</span>
@@ -998,28 +1335,48 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs">
-              {displayedEmployees.length === 0 ? (
+              {isLoadingContracts && contracts.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="py-12 text-center text-slate-500">
+                    <RefreshCw className="w-7 h-7 mx-auto mb-2 text-blue-500 animate-spin" />
+                    <p className="font-medium">Đang tải danh sách hợp đồng...</p>
+                  </td>
+                </tr>
+              ) : displayedContracts.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-12 text-center text-slate-400">
                     <FileText className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
                     <p className="font-medium text-slate-500">
-                      {isTraining
-                        ? 'Không tìm thấy nhân viên nào có Hợp đồng đào tạo (HĐĐT) phù hợp bộ lọc.'
-                        : 'Không tìm thấy nhân viên nào có Hợp đồng thử việc (HĐTV) phù hợp bộ lọc.'}
+                      {signingFilter === 'signed'
+                        ? isTraining
+                          ? 'Chưa có Hợp đồng đào tạo (HĐĐT) nào đã ký phù hợp bộ lọc.'
+                          : 'Chưa có Hợp đồng thử việc (HĐTV) nào đã ký phù hợp bộ lọc.'
+                        : isTraining
+                        ? 'Không tìm thấy Hợp đồng đào tạo (HĐĐT) phù hợp bộ lọc.'
+                        : 'Không tìm thấy Hợp đồng thử việc (HĐTV) phù hợp bộ lọc.'}
                     </p>
                     <p className="text-[11px] text-slate-400 mt-1">
-                      Hãy thử đổi từ khóa tìm kiếm hoặc bỏ bớt các điều kiện lọc.
+                      Hãy thử đổi bộ lọc trạng thái ký hoặc từ khóa tìm kiếm.
                     </p>
                   </td>
                 </tr>
               ) : (
-                paginatedEmployees.map((emp, index) => {
-                  const isSelected = selectedEmployeeIds.has(emp.id);
-                  const hasSalaryData = Boolean((emp.luongThuViec || '').trim() || (emp.bacLuong || '').trim() || (emp.ngachLuong || '').trim());
+                paginatedContracts.map((contract, index) => {
+                  const emp = employeeMap.get(contract.employeeId);
+                  const isSelected = selectedContractIds.has(contract.id);
+                  const salaryText = (contract.probationSalary || contract.salary || '').trim();
+                  const hasSalaryData = Boolean(
+                    salaryText || (contract.bacLuong || '').trim() || (contract.ngachLuong || '').trim()
+                  );
+                  const displayName = contract.fullName || emp?.fullName || 'Chưa có tên';
+                  const displayMsnv = contract.msnv || emp?.msnv || '';
+                  const displayDept = contract.department || emp?.phongBan || emp?.department || '';
+                  const displayPosition = contract.position || emp?.chucVu || emp?.jobTitle || 'Chưa cập nhật';
+                  const displayPhoto = contract.photoUrl || emp?.photoUrl || '';
 
                   return (
                     <tr
-                      key={emp.id}
+                      key={contract.id}
                       className={`hover:bg-slate-50/70 transition-colors ${
                         isSelected ? 'bg-blue-50/40' : ''
                       }`}
@@ -1027,9 +1384,9 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                       {/* Checkbox */}
                       <td className="py-3 px-4 text-center">
                         <input
-                           type="checkbox"
+                          type="checkbox"
                           checked={isSelected}
-                          onChange={() => handleToggleSelect(emp.id)}
+                          onChange={() => handleToggleSelect(contract.id)}
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                         />
                       </td>
@@ -1039,123 +1396,109 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                         {(safeCurrentPage - 1) * pageSize + index + 1}
                       </td>
 
+                      {/* Số HĐ & Loại HĐ & Trạng thái */}
+                      <td className="py-3 px-4">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200/70 px-2 py-0.5 rounded-md text-xs">
+                              {contract.contractNumber ? `#${contract.contractNumber}` : 'Chưa cấp số'}
+                            </span>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                isTraining
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-200'
+                              }`}
+                            >
+                              {contract.contractType || (isTraining ? 'HĐĐT' : 'HĐTV')}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatusBadgeClass(
+                                contract.status
+                              )}`}
+                            >
+                              {contract.status || 'Hiệu lực'}
+                            </span>
+                            {contract.duration && (
+                              <span className="text-[11px] text-slate-500 font-medium">
+                                {contract.duration}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
                       {/* Thông tin nhân viên */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center font-bold text-slate-600 text-xs">
-                            {emp.photoUrl ? (
+                            {displayPhoto ? (
                               <img
-                                src={emp.photoUrl}
-                                alt={emp.fullName}
+                                src={displayPhoto}
+                                alt={displayName}
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              (emp.fullName || 'NV').slice(0, 2).toUpperCase()
+                              displayName.slice(0, 2).toUpperCase()
                             )}
                           </div>
                           <div>
-                            <p className="font-bold text-slate-900 leading-tight">
-                              {emp.fullName || 'Chưa có tên'}
-                            </p>
+                            <p className="font-bold text-slate-900 leading-tight">{displayName}</p>
                             <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                               <span className="font-mono text-[11px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200/50">
-                                {emp.msnv || 'Chưa có mã'}
+                                {displayMsnv || 'Chưa có mã'}
                               </span>
-                              {emp.daKyHopDong ? (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
-                                  <Check className="w-2.5 h-2.5 stroke-[3] text-emerald-700" />
-                                  Đã ký
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-                                  Chưa ký
-                                </span>
-                              )}
-                              {emp.gioiTinh && (
-                                <span className="text-[11px] text-slate-500">
-                                  {emp.gioiTinh}
-                                </span>
+                              {emp?.gioiTinh && (
+                                <span className="text-[11px] text-slate-500">{emp.gioiTinh}</span>
                               )}
                             </div>
+                            {displayDept && (
+                              <p className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[190px]">
+                                {displayDept}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>
 
                       {/* Chức vụ & Công việc */}
                       <td className="py-3 px-4">
-                        <p className="font-semibold text-slate-800">
-                          {emp.chucVu || emp.jobTitle || 'Chưa cập nhật'}
-                        </p>
-                        {emp.congViec && emp.congViec !== emp.chucVu && (
+                        <p className="font-semibold text-slate-800">{displayPosition}</p>
+                        {emp?.congViec && emp.congViec !== displayPosition && (
                           <p className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[160px]">
                             {emp.congViec}
                           </p>
                         )}
                       </td>
 
-                      {/* Loại HĐ & Thời hạn */}
+                      {/* Tình trạng ký hợp đồng */}
                       <td className="py-3 px-4">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                                emp.loaiHd === 'HĐĐT'
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                  : emp.loaiHd === 'HĐTV'
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {emp.loaiHd || 'Chưa có'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setViewingHistoryEmployee(emp)}
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 hover:text-blue-900 bg-blue-50/80 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200/60 transition-colors cursor-pointer"
-                              title="Xem toàn bộ lịch sử các hợp đồng của nhân sự này"
-                            >
-                              <History className="w-2.5 h-2.5 text-blue-600" />
-                              <span>Lịch sử HĐ</span>
-                            </button>
-                            {isContractTerminated(emp) && (
-                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">
-                                Đã nghỉ việc
-                              </span>
-                            )}
-                          </div>
-                          {emp.thoiHan && (
-                            <p className="text-[11px] text-slate-500 font-medium">
-                              Thời hạn: {emp.thoiHan}
-                            </p>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Trạng thái ký hợp đồng */}
-                      <td className="py-3 px-4">
-                        {emp.daKyHopDong ? (
+                        {contract.isSigned ? (
                           <div className="flex flex-col gap-1 items-start">
                             <button
                               type="button"
-                              onClick={() => handleToggleSigned(emp, false)}
+                              onClick={() => handleToggleSigned(contract, false)}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs transition-colors cursor-pointer group"
                               title="Bấm để chuyển về Chưa ký"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
                               <span>Đã ký hợp đồng</span>
                             </button>
-                            <div className="text-[10px] text-slate-500 font-mono-num pl-1 space-y-0.2">
-                              {emp.soHd && <p className="font-semibold text-blue-700">Số HĐ: #{emp.soHd}</p>}
-                              {emp.ngayKyHopDong && <p>Ký: {emp.ngayKyHopDong}</p>}
-                            </div>
+                            {contract.signDate && (
+                              <span className="text-[11px] text-emerald-700 font-semibold font-mono-num pl-1">
+                                Ngày ký: {contract.signDate}
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <div className="flex flex-col gap-1 items-start">
                             <button
                               type="button"
-                              onClick={() => handleToggleSigned(emp, true)}
+                              onClick={() => handleToggleSigned(contract, true)}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs transition-all cursor-pointer group"
-                              title="Bấm để xác nhận nhân viên này đã ký hợp đồng"
+                              title="Bấm để xác nhận hợp đồng này đã ký"
                             >
                               <Clock className="w-3.5 h-3.5 text-amber-600 group-hover:scale-110 transition-transform" />
                               <span>Chưa ký HĐ</span>
@@ -1168,18 +1511,18 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
                       {/* Thời gian hợp đồng (Từ ngày -> Đến ngày) */}
                       <td className="py-3 px-4 text-slate-700">
-                        {emp.tuNgay || emp.denNgay ? (
+                        {contract.startDate || contract.endDate ? (
                           <div className="text-[11px] space-y-0.5">
-                            {emp.tuNgay && (
+                            {contract.startDate && (
                               <p>
                                 <span className="text-slate-400">Từ:</span>{' '}
-                                <span className="font-semibold text-slate-800">{emp.tuNgay}</span>
+                                <span className="font-semibold text-slate-800">{contract.startDate}</span>
                               </p>
                             )}
-                            {emp.denNgay && (
+                            {contract.endDate && (
                               <p>
                                 <span className="text-slate-400">Đến:</span>{' '}
-                                <span className="font-semibold text-slate-800">{emp.denNgay}</span>
+                                <span className="font-semibold text-slate-800">{contract.endDate}</span>
                               </p>
                             )}
                           </div>
@@ -1188,33 +1531,31 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                         )}
                       </td>
 
-                      {/* ======================================================= */}
-                      {/* MỤC NHẬP LƯƠNG + BẬC + NGẠCH (DẠNG BUTTON THEO YÊU CẦU) */}
-                      {/* ======================================================= */}
+                      {/* MỤC NHẬP LƯƠNG + BẬC + NGẠCH */}
                       <td className="py-3 px-4">
                         {hasSalaryData ? (
                           <button
                             type="button"
-                            onClick={() => handleOpenSalaryModal(emp)}
+                            onClick={() => handleOpenSalaryModal(contract)}
                             className="w-full text-left p-2 rounded-xl border border-emerald-200/90 bg-emerald-50/50 hover:bg-emerald-100/70 hover:border-emerald-300 transition-all shadow-2xs group cursor-pointer"
                             title="Bấm để chỉnh sửa Lương, Bậc, Ngạch"
                           >
                             <div className="flex items-center justify-between gap-1.5">
                               <span className="font-bold text-xs text-emerald-800 tracking-tight">
-                                {formatSalaryDisplay(emp.luongThuViec) || 'Chưa nhập mức lương'}
+                                {formatSalaryDisplay(salaryText) || 'Chưa nhập mức lương'}
                               </span>
                               <Edit3 className="w-3.5 h-3.5 text-emerald-600 opacity-60 group-hover:opacity-100 shrink-0 transition-opacity" />
                             </div>
-                            {(emp.bacLuong || emp.ngachLuong) ? (
+                            {contract.bacLuong || contract.ngachLuong ? (
                               <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] font-semibold text-emerald-700">
-                                {emp.bacLuong && (
+                                {contract.bacLuong && (
                                   <span className="bg-emerald-100/80 px-1.5 py-0.2 rounded border border-emerald-200/60">
-                                    Bậc: {emp.bacLuong}
+                                    Bậc: {contract.bacLuong}
                                   </span>
                                 )}
-                                {emp.ngachLuong && (
+                                {contract.ngachLuong && (
                                   <span className="bg-emerald-100/80 px-1.5 py-0.2 rounded border border-emerald-200/60">
-                                    Ngạch: {emp.ngachLuong}
+                                    Ngạch: {contract.ngachLuong}
                                   </span>
                                 )}
                               </div>
@@ -1227,9 +1568,9 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                         ) : (
                           <button
                             type="button"
-                            onClick={() => handleOpenSalaryModal(emp)}
+                            onClick={() => handleOpenSalaryModal(contract)}
                             className="w-full px-3 py-2 rounded-xl border border-dashed border-blue-300 bg-blue-50/40 hover:bg-blue-100/70 hover:border-blue-400 text-blue-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-2xs group cursor-pointer"
-                            title="Bấm để nhập Lương, Bậc, Ngạch cho nhân viên này"
+                            title="Bấm để nhập Lương, Bậc, Ngạch cho hợp đồng này"
                           >
                             <Plus className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform" />
                             <span>Nhập Lương + Bậc + Ngạch</span>
@@ -1239,17 +1580,30 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
 
                       {/* Thao tác: Dấu 3 chấm mở menu thao tác */}
                       <td className="py-3 px-4 text-center">
-                        <div className="relative inline-block text-left">
+                        <div className="inline-block text-left">
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setOpenActionMenuEmpId(
-                                openActionMenuEmpId === emp.id ? null : emp.id
-                              );
+                              if (actionMenuState && actionMenuState.contract.id === contract.id) {
+                                setActionMenuState(null);
+                                return;
+                              }
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 310;
+                              const spaceBelow = window.innerHeight - rect.bottom;
+                              const openUpwards = spaceBelow < menuHeight && rect.top > menuHeight;
+
+                              setActionMenuState({
+                                contract,
+                                top: rect.bottom + 4,
+                                bottom: window.innerHeight - rect.top + 4,
+                                right: window.innerWidth - rect.right,
+                                openUpwards,
+                              });
                             }}
                             className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
-                              openActionMenuEmpId === emp.id
+                              actionMenuState?.contract.id === contract.id
                                 ? 'bg-blue-100 text-blue-700'
                                 : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200'
                             }`}
@@ -1257,124 +1611,6 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                           >
                             <MoreVertical className="w-4 h-4" />
                           </button>
-
-                          {openActionMenuEmpId === emp.id && (
-                            <>
-                              <div
-                                className="fixed inset-0 z-30"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenActionMenuEmpId(null);
-                                }}
-                              />
-                              <div
-                                className={`absolute right-0 z-40 w-56 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 text-left text-xs animate-in fade-in zoom-in-95 duration-100 ${
-                                  paginatedEmployees.indexOf(emp) >= 4 &&
-                                  paginatedEmployees.indexOf(emp) >= paginatedEmployees.length - 3
-                                    ? 'bottom-full mb-1 origin-bottom-right'
-                                    : 'top-full mt-1 origin-top-right'
-                                }`}
-                              >
-                                {/* Header của bảng thao tác */}
-                                <div className="px-3.5 py-1.5 border-b border-slate-100 flex items-center justify-between">
-                                  <span className="font-bold text-[10px] text-slate-400 uppercase tracking-wider">
-                                    Bảng thao tác
-                                  </span>
-                                  <span className="text-[10px] font-mono-num font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
-                                    {emp.msnv}
-                                  </span>
-                                </div>
-
-                                <div className="px-3.5 py-1 font-bold text-slate-900 text-xs truncate">
-                                  {emp.fullName}
-                                </div>
-
-                                <div className="py-1">
-                                  {/* THAO TÁC 0: Xem lịch sử hợp đồng */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      setViewingHistoryEmployee(emp);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-blue-700 hover:bg-blue-50 cursor-pointer transition-colors group font-semibold"
-                                  >
-                                    <History className="w-3.5 h-3.5 text-blue-600" />
-                                    <span>Xem lịch sử hợp đồng</span>
-                                  </button>
-
-                                  {/* THAO TÁC KÝ HỢP ĐỒNG: Đánh dấu đã ký / chưa ký */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      handleToggleSigned(emp, !emp.daKyHopDong);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors group"
-                                  >
-                                    {emp.daKyHopDong ? (
-                                      <>
-                                        <XCircle className="w-3.5 h-3.5 text-amber-500" />
-                                        <span className="font-medium text-amber-700">Hủy đánh dấu đã ký HĐ</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                        <span className="font-medium text-emerald-700">Đánh dấu đã ký HĐ</span>
-                                      </>
-                                    )}
-                                  </button>
-
-                                  {/* THAO TÁC 1: In / Tạo văn bản Hợp đồng */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      handleOpenDocGenerator([emp]);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 cursor-pointer transition-colors group"
-                                  >
-                                    <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
-                                    <span className="font-medium">
-                                      {isTraining ? 'Tạo / In HĐ đào tạo' : 'Tạo / In HĐ thử việc'}
-                                    </span>
-                                  </button>
-
-                                  {/* THAO TÁC 2: Nhập Lương, Bậc, Ngạch */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenActionMenuEmpId(null);
-                                      handleOpenSalaryModal(emp);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer transition-colors group"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600" />
-                                    <span className="font-medium">Nhập Lương, Bậc, Ngạch</span>
-                                  </button>
-
-                                  {/* THAO TÁC 3: Chấm dứt hợp đồng (chỉ hiển thị khi hợp đồng chưa chấm dứt) */}
-                                  {!isContractTerminated(emp) && (
-                                    <div className="pt-1 mt-1 border-t border-slate-100">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setOpenActionMenuEmpId(null);
-                                          setTerminatingEmployee(emp);
-                                        }}
-                                        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-red-600 hover:bg-red-50 hover:text-red-700 cursor-pointer transition-colors group font-semibold"
-                                      >
-                                        <div className="p-1 rounded-md bg-red-100 text-red-600 group-hover:bg-red-600 group-hover:text-white transition-colors">
-                                          <FileX className="w-3.5 h-3.5" />
-                                        </div>
-                                        <span>Chấm dứt hợp đồng</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -1391,20 +1627,20 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
             <span>
               Đang xem{' '}
               <strong className="font-mono-num text-slate-800">
-                {displayedEmployees.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1}
+                {displayedContracts.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1}
               </strong>{' '}
               -{' '}
               <strong className="font-mono-num text-slate-800">
-                {Math.min(safeCurrentPage * pageSize, displayedEmployees.length)}
+                {Math.min(safeCurrentPage * pageSize, displayedContracts.length)}
               </strong>{' '}
               trong tổng số{' '}
               <strong className={`font-mono-num ${isTraining ? 'text-emerald-700' : 'text-blue-700'}`}>
-                {displayedEmployees.length}
+                {displayedContracts.length}
               </strong>{' '}
-              nhân sự
-              {selectedEmployeeIds.size > 0 && (
+              hợp đồng
+              {selectedContractIds.size > 0 && (
                 <span className="ml-2 font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full text-[11px]">
-                  Đang chọn: {selectedEmployeeIds.size}
+                  Đang chọn: {selectedContractIds.size}
                 </span>
               )}
             </span>
@@ -1501,10 +1737,154 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
         </div>
       </div>
 
+      {/* Floating Action Menu (Bảng thao tác nổi - không bị che khuất bởi overflow bảng) */}
+      {actionMenuState && (
+        <>
+          <div
+            className="fixed inset-0 z-50 bg-transparent"
+            onClick={(e) => {
+              e.stopPropagation();
+              setActionMenuState(null);
+            }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: actionMenuState.openUpwards ? undefined : actionMenuState.top,
+              bottom: actionMenuState.openUpwards ? actionMenuState.bottom : undefined,
+              right: Math.max(16, actionMenuState.right),
+            }}
+            className="z-50 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 text-left text-xs animate-in fade-in zoom-in-95 duration-100"
+          >
+            {/* Header của bảng thao tác */}
+            <div className="px-3.5 py-1.5 border-b border-slate-100 flex items-center justify-between">
+              <span className="font-bold text-[10px] text-slate-400 uppercase tracking-wider">
+                Thao tác hợp đồng
+              </span>
+              <span className="text-[10px] font-mono-num font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                {actionMenuState.contract.contractNumber
+                  ? `#${actionMenuState.contract.contractNumber}`
+                  : actionMenuState.contract.msnv}
+              </span>
+            </div>
+
+            <div className="px-3.5 py-1 font-bold text-slate-900 text-xs truncate">
+              {actionMenuState.contract.fullName || 'Nhân viên'}
+            </div>
+
+            <div className="py-1">
+              {/* THAO TÁC 0: Xem lịch sử hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetContract = actionMenuState.contract;
+                  setActionMenuState(null);
+                  setViewingHistoryEmployee(buildEmployeeForContract(targetContract));
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-blue-700 hover:bg-blue-50 cursor-pointer transition-colors group font-semibold"
+              >
+                <History className="w-3.5 h-3.5 text-blue-600" />
+                <span>Xem lịch sử hợp đồng</span>
+              </button>
+
+              {/* THAO TÁC KÝ HỢP ĐỒNG: Đánh dấu đã ký / chưa ký */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetContract = actionMenuState.contract;
+                  setActionMenuState(null);
+                  handleToggleSigned(targetContract, !targetContract.isSigned);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors group"
+              >
+                {actionMenuState.contract.isSigned ? (
+                  <>
+                    <XCircle className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="font-medium text-amber-700">Hủy đánh dấu đã ký HĐ</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="font-medium text-emerald-700">Đánh dấu đã ký HĐ</span>
+                  </>
+                )}
+              </button>
+
+              {/* THAO TÁC 1: In / Tạo văn bản Hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetContract = actionMenuState.contract;
+                  setActionMenuState(null);
+                  handleOpenDocGenerator([buildEmployeeForContract(targetContract)]);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 cursor-pointer transition-colors group"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600" />
+                <span className="font-medium">
+                  {isTraining ? 'Tạo / In HĐ đào tạo' : 'Tạo / In HĐ thử việc'}
+                </span>
+              </button>
+
+              {/* THAO TÁC: Tái ký hợp đồng */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetContract = actionMenuState.contract;
+                  setActionMenuState(null);
+                  setRenewingEmployee(buildEmployeeForContract(targetContract));
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer transition-colors group"
+              >
+                <FileSignature className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600" />
+                <span className="font-medium">Tái ký hợp đồng</span>
+              </button>
+
+              {/* THAO TÁC 2: Nhập Lương, Bậc, Ngạch */}
+              <button
+                type="button"
+                onClick={() => {
+                  const targetContract = actionMenuState.contract;
+                  setActionMenuState(null);
+                  handleOpenSalaryModal(targetContract);
+                }}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer transition-colors group"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600" />
+                <span className="font-medium">Nhập Lương, Bậc, Ngạch</span>
+              </button>
+
+              {/* THAO TÁC 3: Chấm dứt hợp đồng (chỉ hiển thị khi hợp đồng còn hiệu lực) */}
+              {actionMenuState.contract.status !== 'Đã chấm dứt' && (
+                <div className="pt-1 mt-1 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetContract = actionMenuState.contract;
+                      setActionMenuState(null);
+                      setTerminatingTarget({
+                        employee: buildEmployeeForContract(targetContract),
+                        contract: targetContract,
+                      });
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-red-600 hover:bg-red-50 hover:text-red-700 cursor-pointer transition-colors group font-semibold"
+                  >
+                    <div className="p-1 rounded-md bg-red-100 text-red-600 group-hover:bg-red-600 group-hover:text-white transition-colors">
+                      <FileX className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Chấm dứt hợp đồng</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ===================================================================== */}
-      {/* 6. MODAL NHẬP LƯƠNG + BẬC + NGẠCH CHO 1 NHÂN VIÊN (THEO YÊU CẦU MỚI) */}
+      {/* 6. MODAL NHẬP LƯƠNG + BẬC + NGẠCH CHO 1 HỢP ĐỒNG */}
       {/* ===================================================================== */}
-      {editingEmployee && (
+      {editingContract && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
             {/* Header modal */}
@@ -1518,13 +1898,14 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                     Nhập Lương + Bậc + Ngạch
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {editingEmployee.fullName} • MSNV: {editingEmployee.msnv}
+                    {editingContract.contractNumber ? `HĐ #${editingContract.contractNumber} • ` : ''}
+                    {editingContract.fullName} ({editingContract.msnv})
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setEditingEmployee(null)}
+                onClick={() => setEditingContract(null)}
                 className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -1662,7 +2043,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
             <div className="flex items-center justify-end gap-2.5 pt-3.5 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setEditingEmployee(null)}
+                onClick={() => setEditingContract(null)}
                 disabled={isSavingSalaryModal}
                 className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
@@ -1682,7 +2063,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* 7. MODAL NHẬP LƯƠNG + BẬC + NGẠCH HÀNG LOẠT (KHI CHỌN NHIỀU NHÂN VIÊN) */}
+      {/* 7. MODAL NHẬP LƯƠNG + BẬC + NGẠCH HÀNG LOẠT (KHI CHỌN NHIỀU HỢP ĐỒNG) */}
       {/* ===================================================================== */}
       {isBatchSalaryModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
@@ -1696,7 +2077,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                   Nhập Lương, Bậc &amp; Ngạch hàng loạt
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Áp dụng chung cho {selectedEmployeeIds.size} nhân viên đã chọn
+                  Áp dụng chung cho {selectedContractIds.size} hợp đồng đã chọn
                 </p>
               </div>
             </div>
@@ -1831,6 +2212,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                 employees.map((e) => updatedMap.get(e.id) || e)
               );
             }
+            loadContracts();
             if (onRefreshData) onRefreshData();
           }}
         />
@@ -1839,12 +2221,12 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
       {/* 8. MODAL CHẤM DỨT HỢP ĐỒNG */}
       <ErrorBoundary
         fallbackTitle="Lỗi hiển thị cửa sổ Chấm dứt hợp đồng"
-        onReset={() => setTerminatingEmployee(null)}
+        onReset={() => setTerminatingTarget(null)}
       >
         <TerminateContractModal
-          isOpen={!!terminatingEmployee}
-          employee={terminatingEmployee}
-          onClose={() => setTerminatingEmployee(null)}
+          isOpen={!!terminatingTarget}
+          employee={terminatingTarget?.employee || null}
+          onClose={() => setTerminatingTarget(null)}
           onConfirm={handleTerminateContract}
         />
       </ErrorBoundary>
@@ -1862,7 +2244,10 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
           contractType={contractType}
           onUpdateEmployee={onUpdateEmployee}
           onBatchUpdateEmployees={onBatchUpdateEmployees}
-          onRefreshData={onRefreshData}
+          onRefreshData={async () => {
+            await loadContracts();
+            if (onRefreshData) await onRefreshData();
+          }}
         />
       </ErrorBoundary>
 
@@ -1892,6 +2277,7 @@ export const ContractManagementView: React.FC<ContractManagementViewProps> = ({
                 employees.map((e) => (e.id === updatedEmp.id ? updatedEmp : e))
               );
             }
+            loadContracts();
             if (onRefreshData) onRefreshData();
           }}
           onOpenDocumentGenerator={(emp) => {

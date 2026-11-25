@@ -384,10 +384,8 @@ export const DocumentGeneratorModal: React.FC<DocumentGeneratorModalProps> = ({
       }
       return res;
     } catch (err) {
-      if (!silent) {
-        setErrorMessage(err instanceof Error ? err.message : 'Lỗi lưu số hợp đồng');
-        setTimeout(() => setErrorMessage(null), 4000);
-      }
+      setErrorMessage(err instanceof Error ? err.message : 'Lỗi lưu số hợp đồng');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setIsSavingAllocations(false);
     }
@@ -1289,11 +1287,11 @@ ${contentHtml}
                       <button
                         type="button"
                         onClick={() => saveContractAllocations(false)}
-                        disabled={isSavingAllocations}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs shadow-2xs transition-all cursor-pointer ${
+                        disabled={isSavingAllocations || hasSavedAllocations}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-xs shadow-2xs transition-all ${
                           hasSavedAllocations
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 cursor-default'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer'
                         }`}
                         title="Lưu số hợp đồng mới vào hồ sơ nhân viên và bảng lịch sử hợp đồng"
                       >

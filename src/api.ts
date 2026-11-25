@@ -59,6 +59,41 @@ export const api = {
 
   async updateEmployee(e,t){let n=await(await fetch(`${API_BASE}/employees/${e}`,{method:`PUT`,headers:{"Content-Type":`application/json`},body:JSON.stringify(t)})).json();if(!n.success)throw Error(n.error||`Lỗi cập nhật nhân viên`);return n.employee},
 
+  async getContracts(): Promise<ContractRecord[]> {
+    const res = await fetch(`${API_BASE}/contracts`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || `Lỗi tải danh sách hợp đồng đã tạo (HTTP ${res.status})`);
+    }
+    return json.contracts || [];
+  },
+
+  async updateContract(
+    id: string,
+    updates: Partial<ContractRecord>
+  ): Promise<{ success: boolean; contract: ContractRecord; employee?: Employee | null }> {
+    const res = await fetch(`${API_BASE}/contracts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || `Lỗi cập nhật hợp đồng (HTTP ${res.status})`);
+    }
+    return json;
+  },
+
+  async deleteContract(id: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/contracts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || `Lỗi xóa hợp đồng (HTTP ${res.status})`);
+    }
+  },
+
   async getContractHistory(e){let t=await fetch(`${API_BASE}/contracts/${encodeURIComponent(e)}/history`),n=await t.json();if(!t.ok||!n.success)throw Error(n.error||`Lỗi tải lịch sử hợp đồng`);return n.contracts||[]},
 
   async getNextContractNumber(e=1){try{let t=await(await fetch(`${API_BASE}/contracts/next-number?count=${e}`)).json();return{nextContractNumber:t.nextContractNumber||`1080`,numbers:Array.isArray(t.numbers)?t.numbers:[t.nextContractNumber||`1080`]}}catch{return{nextContractNumber:`1080`,numbers:[`1080`]}}},
