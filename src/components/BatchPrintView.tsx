@@ -1,0 +1,1778 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { flushSync } from 'react-dom';
+import {
+  Printer,
+  FileDown,
+  Search,
+  CheckSquare,
+  Square,
+  Layers,
+  Sliders,
+  CheckCircle2,
+  CreditCard,
+  FileText,
+  RefreshCw,
+  Calendar,
+  X,
+  Save,
+  Camera,
+  UserPlus,
+  AlertCircle,
+  ScanFace,
+  Sparkles,
+} from 'lucide-react';
+import { toPng } from 'html-to-image';
+import { jsPDF } from 'jspdf';
+import { AppSettings, CardTemplate, Department, Employee } from '../types';
+import { IdCardPreview } from './IdCardPreview';
+import { triggerBrowserCtrlP } from '../utils/nativePrint';
+import {
+  parseDateToUtcTimestamp,
+  compressImageTo3x4DataUrl,
+  stripViAccents,
+} from './EmployeeManagementView';
+import { FaceCropModal } from './FaceCropStudioView';
+import { isNewlyCreatedEmployee, sortEmployeesNewestFirst } from '../utils/employeeUtils';
+
+const PRINT_UI_PREFS_STORAGE_KEY = 'vietsun_print_ui_prefs_v1';
+
+interface SavedPrintUiPrefs {
+  showCropMarks: boolean;
+  previewScale: number;
+}
+
+function loadSavedPrintUiPrefs(): SavedPrintUiPrefs {
+  try {
+    const raw = localStorage.getItem(PRINT_UI_PREFS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SavedPrintUiPrefs>;
+      return {
+        showCropMarks:
+          typeof parsed.showCropMarks === 'boolean' ? parsed.showCropMarks : false,
+        previewScale:
+          typeof parsed.previewScale === 'number' ? parsed.previewScale : 0.78,
+      };
+    }
+  } catch {
+    // ignore storage read error
+  }
+  return {
+    showCropMarks: false,
+    previewScale: 0.78,
+  };
+}
+
+interface BatchPrintViewProps {
+  employees: Employee[];
+  departments: Department[];
+  templates: CardTemplate[];
+  selectedTemplate: CardTemplate;
+  onSelectTemplate: (template: CardTemplate) => void;
+  selectedEmployeeIds: Set<string>;
+  onChangeSelectedIds: (ids: Set<string>) => void;
+  settings: AppSettings;
+  onSaveSettings: (updated: AppSettings) => Promise<void>;
+  onAddEmployee: (data: {
+    msnv: string;
+    fullName: string;
+    department: string;
+    joinDate: string;
+    photoUrl: string;
+  }) => Promise<string>;
+  onUpdateEmployeePhoto: (emp: Employee, photoUrl: string) => Promise<void>;
+  onRecordPrintJob: (
+    printedEmployees: Employee[],
+    printMode: 'a4_grid' | 'cr80_direct' | 'pdf_export',
+    templateName: string,
+    totalPages: number,
+    paperSize: string,
+    duplex: boolean
+  ) => Promise<void>;
+  onOpenPrintDialog: (employeeIds?: string[]) => void;
+}
+
+interface PrintPageDescriptor {
+  pageNumber: number;
+  employees: Employee[];
+}
+
+export const BatchPrintView: React.FC<BatchPrintViewProps> = ({
+  employees,
+  departments,
+  templates,
+  selectedTemplate,
+  onSelectTemplate,
+  selectedEmployeeIds,
+  onChangeSelectedIds,
+  settings,
+  onSaveSettings,
+  onAddEmployee,
+  onUpdateEmployeePhoto,
+  onRecordPrintJob,
+  onOpenPrintDialog,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [deptFilter, setDeptFilter] = useState('ALL');
+  const [printStatusFilter, setPrintStatusFilter] = useState<
+    'ALL' | 'NEWLY_CREATED' | 'UNPRINTED' | 'PRINTED'
+  >('ALL');
+  const [joinDateFrom, setJoinDateFrom] = useState('');
+  const [joinDateTo, setJoinDateTo] = useState('');
+  const [customSelectCount, setCustomSelectCount] = useState<string>('');
+  const [visibleEmployeeLimit, setVisibleEmployeeLimit] = useState<number>(100);
+  const [visiblePageLimit, setVisiblePageLimit] = useState<number>(5);
+
+  // Thống kê số lượng nhân viên theo trạng thái
+  const statusStats = useMemo(() => {
+    let newlyCreated = 0;
+    let unprinted = 0;
+    let printed = 0;
+    employees.forEach((emp) => {
+      if (isNewlyCreatedEmployee(emp)) newlyCreated++;
+      if (!emp.printCount || emp.printCount === 0) unprinted++;
+      else printed++;
+    });
+    return { newlyCreated, unprinted, printed };
+  }, [employees]);
+
+  // Quick Add Employee state right on the Print Page
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [quickMsnv, setQuickMsnv] = useState('');
+  const [quickFullName, setQuickFullName] = useState('');
+  const [quickDept, setQuickDept] = useState(() => departments[0]?.name || '');
+  const [quickJoinDate, setQuickJoinDate] = useState(() => {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yyyy = now.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  });
+  const [quickPhotoUrl, setQuickPhotoUrl] = useState('');
+  const [quickAddError, setQuickAddError] = useState<string | null>(null);
+  const [isQuickAdding, setIsQuickAdding] = useState(false);
+
+  const initialUiPrefs = useMemo(() => loadSavedPrintUiPrefs(), []);
+
+  // Print Layout Settings (Initialized directly from Mục Cài đặt `settings`)
+  const [printMethod, setPrintMethod] = useState<'a4_sheet' | 'cr80_printer'>(
+    settings.defaultPaperSize === 'CR80' ? 'cr80_printer' : 'a4_sheet'
+  );
+  const [paperSize, setPaperSize] = useState<'A4' | 'Letter'>(
+    settings.defaultPaperSize === 'Letter' ? 'Letter' : 'A4'
+  );
+  const [cols, setCols] = useState<number>(settings.defaultCols || 2);
+  const [rows, setRows] = useState<number>(settings.defaultRows || 4);
+  const [gapMm, setGapMm] = useState<number>(
+    typeof settings.defaultGapMm === 'number' ? settings.defaultGapMm : 4
+  );
+  const [marginMm, setMarginMm] = useState<number>(
+    typeof settings.defaultMarginMm === 'number' ? settings.defaultMarginMm : 10
+  );
+  const [cardWidthMm, setCardWidthMm] = useState<number>(
+    settings.cardWidthMm || 85.6
+  );
+  const [cardHeightMm, setCardHeightMm] = useState<number>(
+    settings.cardHeightMm || 54
+  );
+  const [showCropMarks, setShowCropMarks] = useState<boolean>(
+    initialUiPrefs.showCropMarks
+  );
+  const [previewScale, setPreviewScale] = useState<number>(
+    initialUiPrefs.previewScale
+  );
+
+  // Sync cardWidthMm, cardHeightMm, and default page parameters whenever `settings` (from Mục Cài đặt) updates
+  useEffect(() => {
+    setPrintMethod(
+      settings.defaultPaperSize === 'CR80' ? 'cr80_printer' : 'a4_sheet'
+    );
+    setPaperSize(settings.defaultPaperSize === 'Letter' ? 'Letter' : 'A4');
+    if (typeof settings.defaultCols === 'number' && settings.defaultCols > 0) {
+      setCols(settings.defaultCols);
+    }
+    if (typeof settings.defaultRows === 'number' && settings.defaultRows > 0) {
+      setRows(settings.defaultRows);
+    }
+    if (typeof settings.defaultGapMm === 'number') {
+      setGapMm(settings.defaultGapMm);
+    }
+    if (typeof settings.defaultMarginMm === 'number') {
+      setMarginMm(settings.defaultMarginMm);
+    }
+    if (typeof settings.cardWidthMm === 'number' && settings.cardWidthMm > 0) {
+      setCardWidthMm(settings.cardWidthMm);
+    }
+    if (typeof settings.cardHeightMm === 'number' && settings.cardHeightMm > 0) {
+      setCardHeightMm(settings.cardHeightMm);
+    }
+  }, [
+    settings.defaultPaperSize,
+    settings.defaultCols,
+    settings.defaultRows,
+    settings.defaultGapMm,
+    settings.defaultMarginMm,
+    settings.cardWidthMm,
+    settings.cardHeightMm,
+  ]);
+
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isSavingDefault, setIsSavingDefault] = useState(false);
+  const [savedDefaultToast, setSavedDefaultToast] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [uploadingPhotoEmpId, setUploadingPhotoEmpId] = useState<string | null>(
+    null
+  );
+  const [faceCropEmployee, setFaceCropEmployee] = useState<Employee | null>(
+    null
+  );
+  const [isFaceCropModalOpen, setIsFaceCropModalOpen] = useState(false);
+
+  const sheetRefs = useRef<Array<HTMLDivElement | null>>([]);
+
+  // Persist UI-only preferences (crop marks & zoom scale)
+  useEffect(() => {
+    try {
+      const payload: SavedPrintUiPrefs = {
+        showCropMarks,
+        previewScale,
+      };
+      localStorage.setItem(PRINT_UI_PREFS_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage write error
+    }
+  }, [showCropMarks, previewScale]);
+
+  const handleSaveAsDefaultConfig = async () => {
+    setIsSavingDefault(true);
+    try {
+      await onSaveSettings({
+        ...settings,
+        defaultPaperSize: printMethod === 'cr80_printer' ? 'CR80' : paperSize,
+        defaultCols: cols,
+        defaultRows: rows,
+        defaultGapMm: gapMm,
+        defaultMarginMm: marginMm,
+        cardWidthMm,
+        cardHeightMm,
+      });
+
+      setSavedDefaultToast(true);
+      setTimeout(() => setSavedDefaultToast(false), 3000);
+    } finally {
+      setIsSavingDefault(false);
+    }
+  };
+
+  const departmentNames = useMemo(() => {
+    return departments.map((d) => d.name);
+  }, [departments]);
+
+  useEffect(() => {
+    if (!quickDept && departmentNames.length > 0) {
+      setQuickDept(departmentNames[0]);
+    }
+  }, [departmentNames, quickDept]);
+
+  const filteredEmployees = useMemo(() => {
+    const fromTs = parseDateToUtcTimestamp(joinDateFrom);
+    const toTs = parseDateToUtcTimestamp(joinDateTo);
+
+    const list = employees.filter((emp) => {
+      const q = searchQuery.trim().toLowerCase();
+      const qNorm = stripViAccents(q);
+      const matchQuery =
+        !q ||
+        emp.fullName.toLowerCase().includes(q) ||
+        emp.msnv.toLowerCase().includes(q) ||
+        stripViAccents(emp.fullName).includes(qNorm) ||
+        stripViAccents(emp.msnv).includes(qNorm) ||
+        (emp.department && (emp.department.toLowerCase().includes(q) || stripViAccents(emp.department).includes(qNorm))) ||
+        (emp.phongBan && (emp.phongBan.toLowerCase().includes(q) || stripViAccents(emp.phongBan).includes(qNorm))) ||
+        (emp.phongBanCon && (emp.phongBanCon.toLowerCase().includes(q) || stripViAccents(emp.phongBanCon).includes(qNorm)));
+
+      let matchDept = true;
+      if (deptFilter !== 'ALL') {
+        const target = stripViAccents(deptFilter);
+        matchDept =
+          stripViAccents(emp.department || '') === target ||
+          stripViAccents(emp.phongBanCon || '') === target ||
+          stripViAccents(emp.boPhan || '') === target ||
+          stripViAccents(emp.phongBan || '') === target;
+      }
+
+      let matchPrint = true;
+      if (printStatusFilter === 'NEWLY_CREATED') {
+        matchPrint = isNewlyCreatedEmployee(emp);
+      } else if (printStatusFilter === 'UNPRINTED') {
+        matchPrint = !emp.printCount || emp.printCount === 0;
+      } else if (printStatusFilter === 'PRINTED') {
+        matchPrint = emp.printCount > 0;
+      }
+
+      let matchJoinDate = true;
+      if (fromTs !== null || toTs !== null) {
+        const empTs = parseDateToUtcTimestamp(emp.joinDate);
+        if (empTs === null) {
+          matchJoinDate = false;
+        } else {
+          if (fromTs !== null && empTs < fromTs) matchJoinDate = false;
+          if (toTs !== null && empTs > toTs) matchJoinDate = false;
+        }
+      }
+
+      return matchQuery && matchDept && matchPrint && matchJoinDate;
+    });
+
+    // Luôn ưu tiên đưa người mới tạo lên đầu danh sách in thẻ
+    return list.sort(sortEmployeesNewestFirst);
+  }, [employees, searchQuery, deptFilter, printStatusFilter, joinDateFrom, joinDateTo]);
+
+  // Reset lazy render limit to 100 whenever filters change so filtered results appear immediately
+  useEffect(() => {
+    setVisibleEmployeeLimit(100);
+  }, [searchQuery, deptFilter, printStatusFilter, joinDateFrom, joinDateTo]);
+
+  const visibleEmployees = useMemo(() => {
+    return filteredEmployees.slice(0, visibleEmployeeLimit);
+  }, [filteredEmployees, visibleEmployeeLimit]);
+
+  const handleEmployeeListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (visibleEmployeeLimit >= filteredEmployees.length) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 140) {
+      setVisibleEmployeeLimit((prev) =>
+        Math.min(filteredEmployees.length, prev + 100)
+      );
+    }
+  };
+
+  const selectedEmployeesList = useMemo(() => {
+    return employees.filter((emp) => selectedEmployeeIds.has(emp.id));
+  }, [employees, selectedEmployeeIds]);
+
+  // Build paginated pages
+  const pages: PrintPageDescriptor[] = useMemo(() => {
+    if (selectedEmployeesList.length === 0) return [];
+
+    const cardsPerPage =
+      printMethod === 'cr80_printer' ? 1 : Math.max(1, cols * rows);
+    const result: PrintPageDescriptor[] = [];
+    let pageCounter = 1;
+
+    for (let i = 0; i < selectedEmployeesList.length; i += cardsPerPage) {
+      result.push({
+        pageNumber: pageCounter++,
+        employees: selectedEmployeesList.slice(i, i + cardsPerPage),
+      });
+    }
+
+    return result;
+  }, [selectedEmployeesList, printMethod, cols, rows]);
+
+  useEffect(() => {
+    setVisiblePageLimit(5);
+  }, [selectedEmployeeIds.size, printMethod, cols, rows]);
+
+  const visiblePages = useMemo(() => {
+    if (isExportingPdf) return pages;
+    return pages.slice(0, visiblePageLimit);
+  }, [pages, visiblePageLimit, isExportingPdf]);
+
+  const handlePreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (visiblePageLimit >= pages.length) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) {
+      setVisiblePageLimit((prev) => Math.min(pages.length, prev + 5));
+    }
+  };
+
+  // Selection helpers
+  const toggleEmployee = (id: string) => {
+    const next = new Set(selectedEmployeeIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    onChangeSelectedIds(next);
+  };
+
+  const selectQuickCount = (count: number) => {
+    const next = new Set<string>();
+    filteredEmployees.slice(0, count).forEach((emp) => next.add(emp.id));
+    onChangeSelectedIds(next);
+  };
+
+  const selectNewlyCreated = () => {
+    const next = new Set(selectedEmployeeIds);
+    employees.forEach((emp) => {
+      if (isNewlyCreatedEmployee(emp)) {
+        next.add(emp.id);
+      }
+    });
+    onChangeSelectedIds(next);
+  };
+
+  const selectAllFiltered = () => {
+    const next = new Set(selectedEmployeeIds);
+    filteredEmployees.forEach((emp) => next.add(emp.id));
+    onChangeSelectedIds(next);
+  };
+
+  const selectAllEmployees = () => {
+    onChangeSelectedIds(new Set(employees.map((e) => e.id)));
+  };
+
+  const clearSelection = () => {
+    onChangeSelectedIds(new Set());
+  };
+
+  const handleQuickAddSubmit = async (printImmediately = false) => {
+    setQuickAddError(null);
+    const msnvClean = quickMsnv.trim();
+    const nameClean = quickFullName.trim();
+    const deptClean = quickDept.trim();
+    const dateClean = quickJoinDate.trim();
+
+    if (!msnvClean || !nameClean || !deptClean || !dateClean) {
+      setQuickAddError(
+        'Vui lòng nhập đầy đủ MSNV, Họ và tên, Bộ phận và Ngày vào làm.'
+      );
+      return;
+    }
+
+    const duplicate = employees.find(
+      (e) => e.msnv.trim().toLowerCase() === msnvClean.toLowerCase()
+    );
+    if (duplicate) {
+      setQuickAddError(
+        `MSNV "${msnvClean}" đã tồn tại (${duplicate.fullName}). Vui lòng kiểm tra lại!`
+      );
+      return;
+    }
+
+    setIsQuickAdding(true);
+    try {
+      const createdPromise = onAddEmployee({
+        msnv: msnvClean,
+        fullName: nameClean,
+        department: deptClean,
+        joinDate: dateClean,
+        photoUrl: quickPhotoUrl,
+      });
+
+      const newId = await createdPromise;
+      const newEmpObj: Employee = {
+        id: newId,
+        msnv: msnvClean,
+        fullName: nameClean,
+        department: deptClean,
+        joinDate: dateClean,
+        photoUrl: quickPhotoUrl,
+        printCount: 0,
+        lastPrintedAt: '',
+        ownerId: 'vietsun_workspace',
+      };
+
+      // Reset quick add fields for the next entry
+      setQuickMsnv('');
+      setQuickFullName('');
+      setQuickPhotoUrl('');
+
+      if (printImmediately) {
+        triggerNativeCtrlP([newEmpObj]);
+      } else {
+        const nextSelected = new Set(selectedEmployeeIds);
+        nextSelected.add(newId);
+        onChangeSelectedIds(nextSelected);
+        setStatusBanner(
+          `Đã thêm nhân viên "${nameClean}" (MSNV: ${msnvClean}) và tự động tích chọn vào danh sách in!`
+        );
+        setTimeout(() => setStatusBanner(null), 4500);
+      }
+    } catch (err) {
+      setQuickAddError(
+        err instanceof Error ? err.message : 'Lỗi khi thêm nhanh nhân viên.'
+      );
+    } finally {
+      setIsQuickAdding(false);
+    }
+  };
+
+  // Synchronously trigger native browser Ctrl+P print dialog
+  const triggerNativeCtrlP = (targetEmployees: Employee[]) => {
+    if (targetEmployees.length === 0) return;
+
+    const targetIds = targetEmployees.map((e) => e.id);
+    flushSync(() => {
+      onChangeSelectedIds(new Set(targetIds));
+    });
+
+    const isPortrait = selectedTemplate.orientation === 'portrait';
+    const wMm = isPortrait
+      ? Math.min(cardWidthMm, cardHeightMm)
+      : Math.max(cardWidthMm, cardHeightMm);
+    const hMm = isPortrait
+      ? Math.max(cardWidthMm, cardHeightMm)
+      : Math.min(cardWidthMm, cardHeightMm);
+
+    const pageSizeCss =
+      printMethod === 'cr80_printer'
+        ? `${wMm}mm ${hMm}mm`
+        : paperSize === 'A4'
+          ? '210mm 297mm'
+          : '215.9mm 279.4mm';
+
+    triggerBrowserCtrlP(pageSizeCss);
+
+    const cardsPerPage =
+      printMethod === 'cr80_printer' ? 1 : Math.max(1, cols * rows);
+    const totalPagesPrinted = Math.ceil(targetEmployees.length / cardsPerPage);
+
+    void onRecordPrintJob(
+      targetEmployees,
+      printMethod === 'cr80_printer' ? 'cr80_direct' : 'a4_grid',
+      selectedTemplate.name,
+      totalPagesPrinted,
+      printMethod === 'cr80_printer' ? `CR80 (${wMm}x${hMm}mm)` : paperSize,
+      false
+    );
+  };
+
+  const handleDirectPrint = () => {
+    triggerNativeCtrlP(selectedEmployeesList);
+  };
+
+  const handlePrintSingleEmployee = (emp: Employee) => {
+    triggerNativeCtrlP([emp]);
+  };
+
+  // High-Resolution True-Millimeter PDF Export
+  const handleExportPdf = async () => {
+    if (selectedEmployeesList.length === 0 || pages.length === 0) return;
+    setIsExportingPdf(true);
+    setStatusBanner(null);
+
+    try {
+      const isPortraitCard = selectedTemplate.orientation === 'portrait';
+      const wMm = isPortraitCard
+        ? Math.min(cardWidthMm, cardHeightMm)
+        : Math.max(cardWidthMm, cardHeightMm);
+      const hMm = isPortraitCard
+        ? Math.max(cardWidthMm, cardHeightMm)
+        : Math.min(cardWidthMm, cardHeightMm);
+
+      const sheetWidthMm =
+        printMethod === 'cr80_printer' ? wMm : paperSize === 'A4' ? 210 : 215.9;
+      const sheetHeightMm =
+        printMethod === 'cr80_printer' ? hMm : paperSize === 'A4' ? 297 : 279.4;
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      const pdf = new jsPDF({
+        orientation: sheetWidthMm > sheetHeightMm ? 'landscape' : 'portrait',
+        unit: 'mm',
+        format: [sheetWidthMm, sheetHeightMm],
+      });
+
+      for (let i = 0; i < pages.length; i++) {
+        const node = sheetRefs.current[i];
+        if (!node) continue;
+
+        const dataUrl = await toPng(node, {
+          quality: 1,
+          pixelRatio: 3,
+          backgroundColor: '#ffffff',
+        });
+
+        if (i > 0) {
+          pdf.addPage(
+            [sheetWidthMm, sheetHeightMm],
+            sheetWidthMm > sheetHeightMm ? 'landscape' : 'portrait'
+          );
+        }
+        pdf.addImage(dataUrl, 'PNG', 0, 0, sheetWidthMm, sheetHeightMm);
+      }
+
+      const fileName = `In_The_Nhan_Vien_${selectedEmployeesList.length}_The_${new Date()
+        .toISOString()
+        .slice(0, 10)}.pdf`;
+      pdf.save(fileName);
+
+      await onRecordPrintJob(
+        selectedEmployeesList,
+        'pdf_export',
+        selectedTemplate.name,
+        pages.length,
+        printMethod === 'cr80_printer' ? `CR80 (${wMm}x${hMm}mm)` : paperSize,
+        false
+      );
+
+      setStatusBanner(
+        `Đã xuất file PDF (${fileName}) gồm ${selectedEmployeesList.length} thẻ trên ${pages.length} trang chuẩn kích thước mm!`
+      );
+      setTimeout(() => setStatusBanner(null), 6000);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      setStatusBanner(
+        'Có lỗi khi tạo file PDF. Vui lòng thử lại hoặc dùng nút In Trực Tiếp.'
+      );
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const isPortraitCard = selectedTemplate.orientation === 'portrait';
+  const actualCardW = isPortraitCard
+    ? Math.min(cardWidthMm, cardHeightMm)
+    : Math.max(cardWidthMm, cardHeightMm);
+  const actualCardH = isPortraitCard
+    ? Math.max(cardWidthMm, cardHeightMm)
+    : Math.min(cardWidthMm, cardHeightMm);
+
+  const sheetWidthMm =
+    printMethod === 'cr80_printer'
+      ? actualCardW
+      : paperSize === 'A4'
+        ? 210
+        : 215.9;
+  const sheetHeightMm =
+    printMethod === 'cr80_printer'
+      ? actualCardH
+      : paperSize === 'A4'
+        ? 297
+        : 279.4;
+
+  return (
+    <div className="space-y-6 print:space-y-0 print:m-0 print:p-0 print:bg-white">
+      {/* Top Action & Status Bar (Hidden during print) */}
+      <div className="no-print bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+            <Printer className="w-5 h-5 text-blue-700" />
+            Trung Tâm In Thẻ Nhân Viên Hàng Loạt & Xuất PDF Chuẩn Kích Thước
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5 font-mono-num">
+            Đã chọn:{' '}
+            <strong className="text-blue-700">
+              {selectedEmployeesList.length}
+            </strong>{' '}
+            nhân viên · Tổng số trang in:{' '}
+            <strong className="text-blue-700">{pages.length}</strong> trang ·
+            Kích thước thẻ chuẩn:{' '}
+            <strong className="text-slate-800">
+              {actualCardW}mm × {actualCardH}mm (CR80)
+            </strong>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={selectedEmployeesList.length === 0 || isExportingPdf}
+            onClick={handleExportPdf}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50 cursor-pointer transition-colors"
+          >
+            {isExportingPdf ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Đang kết xuất PDF (300 DPI)...
+              </>
+            ) : (
+              <>
+                <FileDown className="w-4 h-4" />
+                Xuất File PDF ({pages.length} trang)
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            disabled={selectedEmployeesList.length === 0}
+            onClick={handleDirectPrint}
+            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 cursor-pointer shadow-xs transition-colors"
+          >
+            <Printer className="w-4 h-4" />
+            In Trực Tiếp Ngay ({selectedEmployeesList.length} thẻ)
+          </button>
+        </div>
+      </div>
+
+      {statusBanner && (
+        <div className="no-print p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2.5">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+          <span>{statusBanner}</span>
+        </div>
+      )}
+
+      {/* Main Split Grid: Left Employee Selector + Right Print Configuration & Sheet Preview */}
+      <div className="no-print grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Employee Selection & Batch Filters (5 cols) */}
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+          <div className="p-4 bg-slate-50 border-b border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                1. Chọn Nhân Viên Cần In Thẻ
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsQuickAddOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                  title="Thêm nhanh nhân viên mới ngay tại màn hình in"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  {isQuickAddOpen ? 'Thu gọn' : '+ Thêm nhanh NV'}
+                </button>
+                <span className="text-xs font-mono-num font-bold text-blue-700">
+                  {selectedEmployeesList.length}/{employees.length} NV
+                </span>
+              </div>
+            </div>
+
+            {/* Inline Quick-Add Employee Panel right inside the Print Page */}
+            {isQuickAddOpen && (
+              <div className="bg-white border border-emerald-300 rounded-xl p-3.5 space-y-3 shadow-xs text-xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <span className="font-bold text-emerald-800 flex items-center gap-1.5">
+                    <UserPlus className="w-4 h-4 text-emerald-600" />
+                    Thêm Nhanh Nhân Viên Để In Thẻ
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsQuickAddOpen(false)}
+                    className="p-0.5 text-slate-400 hover:text-slate-700 rounded cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {quickAddError && (
+                  <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 flex items-start gap-1.5 text-[11px]">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{quickAddError}</span>
+                  </div>
+                )}
+
+                <div className="flex items-start gap-3">
+                  {/* Quick 3x4 Photo Picker */}
+                  <div className="shrink-0 flex flex-col items-center gap-1">
+                    <label
+                      className="w-14 h-18 rounded border border-dashed border-blue-400 bg-slate-50 hover:bg-blue-50/50 overflow-hidden flex flex-col items-center justify-center cursor-pointer transition-colors"
+                      title="Bấm để chọn ảnh 3×4 (không bắt buộc)"
+                    >
+                      {quickPhotoUrl ? (
+                        <img
+                          src={quickPhotoUrl}
+                          alt="3x4 preview"
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-blue-600 p-1 text-center">
+                          <Camera className="w-4 h-4 mb-0.5" />
+                          <span className="text-[10px] font-bold leading-tight">
+                            + Ảnh 3×4
+                          </span>
+                        </div>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const compressed =
+                              await compressImageTo3x4DataUrl(file);
+                            setQuickPhotoUrl(compressed);
+                          } finally {
+                            e.target.value = '';
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    {quickPhotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setQuickPhotoUrl('')}
+                        className="text-[10px] text-red-600 hover:underline cursor-pointer"
+                      >
+                        Xóa ảnh
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Quick Fields */}
+                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                        MSNV *
+                      </label>
+                      <input
+                        type="text"
+                        value={quickMsnv}
+                        onChange={(e) => setQuickMsnv(e.target.value)}
+                        placeholder="VD: 06868"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-mono-num focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                        Ngày vào làm *
+                      </label>
+                      <input
+                        type="text"
+                        value={quickJoinDate}
+                        onChange={(e) => setQuickJoinDate(e.target.value)}
+                        placeholder="DD/MM/YYYY"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg font-mono-num focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                        Họ và tên nhân viên *
+                      </label>
+                      <input
+                        type="text"
+                        value={quickFullName}
+                        onChange={(e) => setQuickFullName(e.target.value)}
+                        placeholder="VD: TÊN NHÂN VIÊN"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                        Bộ phận công tác *
+                      </label>
+                      <select
+                        value={quickDept}
+                        onChange={(e) => setQuickDept(e.target.value)}
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-blue-600"
+                      >
+                        <option value="" disabled>
+                          -- Chọn bộ phận công tác --
+                        </option>
+                        {departmentNames.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    disabled={isQuickAdding}
+                    onClick={() => handleQuickAddSubmit(false)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg cursor-pointer disabled:opacity-50"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    + Thêm Vào Danh Sách In
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isQuickAdding}
+                    onClick={() => handleQuickAddSubmit(true)}
+                    className="inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-50 shadow-2xs"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    Thêm &amp; In Ngay (Ctrl + P)
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Status Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-lg border border-slate-200 text-xs">
+              <button
+                type="button"
+                onClick={() => setPrintStatusFilter('ALL')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                  printStatusFilter === 'ALL'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Tất cả ({employees.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintStatusFilter('NEWLY_CREATED')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                  printStatusFilter === 'NEWLY_CREATED'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                }`}
+                title="Lọc chỉ nhân viên mới tạo gần đây"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Người mới tạo ({statusStats.newlyCreated})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintStatusFilter('UNPRINTED')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                  printStatusFilter === 'UNPRINTED'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Chưa in ({statusStats.unprinted})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintStatusFilter('PRINTED')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                  printStatusFilter === 'PRINTED'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Đã in ({statusStats.printed})
+              </button>
+            </div>
+
+            {/* Search & Filters */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Tìm theo tên hoặc MSNV trước khi chọn in..."
+                className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-600"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={deptFilter}
+                onChange={(e) => setDeptFilter(e.target.value)}
+                className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+              >
+                <option value="ALL">
+                  Tất cả bộ phận ({departmentNames.length})
+                </option>
+                {departmentNames.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={printStatusFilter}
+                onChange={(e) =>
+                  setPrintStatusFilter(
+                    e.target.value as 'ALL' | 'NEWLY_CREATED' | 'UNPRINTED' | 'PRINTED'
+                  )
+                }
+                className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-medium"
+              >
+                <option value="ALL">Mọi trạng thái in ({employees.length})</option>
+                <option value="NEWLY_CREATED">⭐ Người mới tạo ({statusStats.newlyCreated})</option>
+                <option value="UNPRINTED">Chưa in thẻ lần nào ({statusStats.unprinted})</option>
+                <option value="PRINTED">Đã từng in thẻ ({statusStats.printed})</option>
+              </select>
+            </div>
+
+            {/* Join Date Range Filter */}
+            <div className="flex flex-wrap items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs">
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-700">
+                <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                Ngày vào:
+              </span>
+              <input
+                type="date"
+                value={joinDateFrom}
+                onChange={(e) => setJoinDateFrom(e.target.value)}
+                className="px-1.5 py-0.5 border border-slate-300 rounded font-mono-num text-[11px]"
+                title="Từ ngày vào làm"
+              />
+              <span className="text-slate-400">→</span>
+              <input
+                type="date"
+                value={joinDateTo}
+                onChange={(e) => setJoinDateTo(e.target.value)}
+                className="px-1.5 py-0.5 border border-slate-300 rounded font-mono-num text-[11px]"
+                title="Đến ngày vào làm"
+              />
+              {(joinDateFrom || joinDateTo) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJoinDateFrom('');
+                    setJoinDateTo('');
+                  }}
+                  className="p-0.5 text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                  title="Xóa lọc ngày"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Quick Batch Selection Buttons (Chọn người mới tạo, 1, 10, 50, Custom Count, All) */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={selectNewlyCreated}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 hover:bg-emerald-200 rounded cursor-pointer shadow-2xs transition-colors"
+                title={`Chọn nhanh toàn bộ ${statusStats.newlyCreated} nhân viên mới tạo để in thẻ`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Chọn người mới tạo ({statusStats.newlyCreated})</span>
+              </button>
+              <button
+                type="button"
+                onClick={selectAllEmployees}
+                className="px-2.5 py-1 text-[11px] font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded cursor-pointer"
+              >
+                Chọn tất cả ({employees.length})
+              </button>
+              <button
+                type="button"
+                onClick={selectAllFiltered}
+                className="px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded cursor-pointer"
+              >
+                Chọn theo bộ lọc ({filteredEmployees.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomSelectCount('1');
+                  selectQuickCount(1);
+                }}
+                className="px-2 py-1 text-[11px] font-mono-num font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded cursor-pointer"
+              >
+                Chọn 1
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomSelectCount('10');
+                  selectQuickCount(10);
+                }}
+                className="px-2 py-1 text-[11px] font-mono-num font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded cursor-pointer"
+              >
+                Chọn 10
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomSelectCount('50');
+                  selectQuickCount(50);
+                }}
+                className="px-2 py-1 text-[11px] font-mono-num font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded cursor-pointer"
+              >
+                Chọn 50
+              </button>
+              <div className="inline-flex items-center bg-white border border-slate-300 rounded overflow-hidden focus-within:border-blue-600">
+                <span className="pl-2 pr-1 text-[11px] text-slate-500 select-none">
+                  SL:
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={filteredEmployees.length}
+                  value={customSelectCount}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomSelectCount(val);
+                    const num = parseInt(val, 10);
+                    if (!Number.isNaN(num) && num > 0) {
+                      selectQuickCount(num);
+                    } else if (val === '' || num === 0) {
+                      clearSelection();
+                    }
+                  }}
+                  placeholder="Nhập số..."
+                  className="w-16 px-1.5 py-1 text-[11px] font-mono-num font-semibold text-slate-900 focus:outline-none"
+                  title="Nhập số lượng nhân viên cần chọn theo danh sách lọc hiện tại"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomSelectCount('');
+                  clearSelection();
+                }}
+                className="px-2 py-1 text-[11px] font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded cursor-pointer ml-auto"
+              >
+                Bỏ chọn
+              </button>
+            </div>
+          </div>
+
+          {/* Employee Checklist Table (Lazy loaded 100 items per scroll batch) */}
+          <div
+            onScroll={handleEmployeeListScroll}
+            className="max-h-[460px] overflow-y-auto divide-y divide-slate-200"
+          >
+            {filteredEmployees.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                Không tìm thấy nhân viên phù hợp với bộ lọc.
+              </div>
+            ) : (
+              <>
+                {visibleEmployees.map((emp) => {
+                  const isSelected = selectedEmployeeIds.has(emp.id);
+                  const isUploadingThis = uploadingPhotoEmpId === emp.id;
+                  return (
+                    <div
+                      key={emp.id}
+                      onClick={() => toggleEmployee(emp.id)}
+                      className={`px-4 py-2.5 flex items-center justify-between gap-2 cursor-pointer transition-colors text-xs ${
+                        isSelected
+                          ? 'bg-blue-50/70 hover:bg-blue-50'
+                          : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          className="text-blue-600 shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleEmployee(emp.id);
+                          }}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400" />
+                          )}
+                        </button>
+
+                        {/* Clickable 3x4 Photo Thumbnail */}
+                        <div
+                          className="relative shrink-0 group"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <label
+                            className="w-8 h-10 rounded border border-slate-300 bg-white overflow-hidden flex flex-col items-center justify-center cursor-pointer hover:border-blue-600 transition-colors"
+                            title={`Bấm để chọn hoặc đổi hình 3×4 cho ${emp.fullName}`}
+                          >
+                            {isUploadingThis ? (
+                              <span className="text-[8px] font-bold text-blue-600">
+                                ...
+                              </span>
+                            ) : emp.photoUrl ? (
+                              <img
+                                src={emp.photoUrl}
+                                alt={emp.fullName}
+                                loading="lazy"
+                                decoding="async"
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center text-blue-600">
+                                <Camera className="w-3 h-3" />
+                                <span className="text-[8px] font-bold leading-none mt-0.5">
+                                  3×4
+                                </span>
+                              </div>
+                            )}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                setUploadingPhotoEmpId(emp.id);
+                                try {
+                                  const compressed =
+                                    await compressImageTo3x4DataUrl(file);
+                                  await onUpdateEmployeePhoto(emp, compressed);
+                                } finally {
+                                  setUploadingPhotoEmpId(null);
+                                  e.target.value = '';
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-900 truncate">
+                            {emp.fullName}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate">
+                            MSNV:{' '}
+                            <strong className="font-mono-num text-slate-700">
+                              {emp.msnv}
+                            </strong>{' '}
+                            · {emp.department}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFaceCropEmployee(emp);
+                            setIsFaceCropModalOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-blue-700 bg-white border border-blue-200 hover:bg-blue-50 rounded cursor-pointer"
+                          title={`Mở công cụ AI cắt ảnh 3×4 cho ${emp.fullName}`}
+                        >
+                          <ScanFace className="w-3 h-3" />
+                          <span>Cắt 3×4 AI</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handlePrintSingleEmployee(emp);
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-white bg-blue-700 hover:bg-blue-800 rounded cursor-pointer"
+                          title="In ngay thẻ của nhân viên này"
+                        >
+                          <Printer className="w-3 h-3" />
+                          In
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {visibleEmployeeLimit < filteredEmployees.length && (
+                  <div className="p-3 bg-slate-50 text-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVisibleEmployeeLimit((prev) =>
+                          Math.min(filteredEmployees.length, prev + 100)
+                        )
+                      }
+                      className="px-3.5 py-1.5 text-xs font-semibold text-blue-700 bg-white border border-blue-200 hover:bg-blue-50 rounded-lg cursor-pointer transition-colors"
+                    >
+                      Đang hiển thị {visibleEmployees.length} / {filteredEmployees.length} nhân viên — Cuộn xuống hoặc bấm để tải thêm 100 người
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Sticky Bottom Print Button inside Employee Selection Table */}
+          <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-700">
+              Tổng cộng: <strong className="text-blue-700 font-mono-num">{selectedEmployeesList.length}</strong> thẻ
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={selectedEmployeesList.length === 0 || isExportingPdf}
+                onClick={handleExportPdf}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-white border border-blue-200 rounded-lg hover:bg-blue-50 disabled:opacity-50 cursor-pointer"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                Xuất PDF
+              </button>
+              <button
+                type="button"
+                disabled={selectedEmployeesList.length === 0}
+                onClick={handleDirectPrint}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg disabled:opacity-50 cursor-pointer shadow-xs"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                In Ngay ({selectedEmployeesList.length} thẻ)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Print Configuration & Multi-Page Sheet Preview (7 cols) */}
+        <div className="lg:col-span-7 space-y-5">
+          {/* Configuration Card */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700">
+                <Sliders className="w-4 h-4 text-blue-600" />
+                2. Cấu Hình Phương Thức In & Dàn Trang
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-500">Mẫu thiết kế:</span>
+                <select
+                  value={selectedTemplate.id}
+                  onChange={(e) => {
+                    const found = templates.find(
+                      (t) => t.id === e.target.value
+                    );
+                    if (found) onSelectTemplate(found);
+                  }}
+                  className="px-2.5 py-1 font-semibold bg-slate-50 border border-slate-300 rounded-lg"
+                >
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  disabled={isSavingDefault}
+                  onClick={handleSaveAsDefaultConfig}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer transition-colors shadow-xs disabled:opacity-50"
+                  title="Lưu toàn bộ thông số kích thước, số cột/hàng, lề giấy hiện tại làm mặc định"
+                >
+                  {savedDefaultToast ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Đã lưu mặc định!
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      Lưu thông tin mặc định
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Method Selector: A4 Multi-card Sheet vs Dedicated CR80 Plastic Card Printer */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setPrintMethod('a4_sheet')}
+                className={`p-3 rounded-lg border text-left flex items-start gap-3 cursor-pointer transition-colors ${
+                  printMethod === 'a4_sheet'
+                    ? 'border-blue-600 bg-blue-50/50'
+                    : 'border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <FileText className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs font-bold text-slate-900">
+                    In Nhiều Thẻ Trên Giấy A4 / Letter
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Tự động dàn nhiều thẻ trên 1 trang giấy A4 (tiết kiệm giấy,
+                    có đường viền cắt)
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPrintMethod('cr80_printer')}
+                className={`p-3 rounded-lg border text-left flex items-start gap-3 cursor-pointer transition-colors ${
+                  printMethod === 'cr80_printer'
+                    ? 'border-blue-600 bg-blue-50/50'
+                    : 'border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <CreditCard className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs font-bold text-slate-900">
+                    Máy In Thẻ Nhựa Chuyên Dụng (CR80)
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Mỗi thẻ 1 trang đúng khổ phôi thẻ PVC chuẩn 85.6mm × 54mm
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            {/* Grid, Margin, & Gap Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-xs">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  Rộng × Cao thẻ (mm)
+                </label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={cardWidthMm}
+                    onChange={(e) =>
+                      setCardWidthMm(Number(e.target.value) || 0)
+                    }
+                    className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num"
+                  />
+                  <span>×</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={cardHeightMm}
+                    onChange={(e) =>
+                      setCardHeightMm(Number(e.target.value) || 0)
+                    }
+                    className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num"
+                  />
+                </div>
+              </div>
+
+              {printMethod === 'a4_sheet' && (
+                <>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Số Cột × Số Hàng / trang
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <select
+                        value={cols}
+                        onChange={(e) => setCols(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num bg-white"
+                      >
+                        <option value={1}>1 cột</option>
+                        <option value={2}>2 cột</option>
+                        <option value={3}>3 cột</option>
+                      </select>
+                      <span>×</span>
+                      <select
+                        value={rows}
+                        onChange={(e) => setRows(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num bg-white"
+                      >
+                        <option value={1}>1 hàng</option>
+                        <option value={2}>2 hàng</option>
+                        <option value={3}>3 hàng</option>
+                        <option value={4}>4 hàng</option>
+                        <option value={5}>5 hàng</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Lề giấy / Khoảng cách (mm)
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        value={marginMm}
+                        onChange={(e) => setMarginMm(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num"
+                        title="Lề trang giấy (mm)"
+                      />
+                      <span>/</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={20}
+                        value={gapMm}
+                        onChange={(e) => setGapMm(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 border border-slate-300 rounded-lg font-mono-num"
+                        title="Khoảng cách giữa các thẻ (mm)"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {printMethod === 'a4_sheet' && (
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs">
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showCropMarks}
+                      onChange={(e) => setShowCropMarks(e.target.checked)}
+                      className="accent-blue-600"
+                    />
+                    <span className="text-slate-700">
+                      Hiển thị đường nét đứt hỗ trợ cắt thẻ
+                    </span>
+                  </label>
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500">Khổ giấy:</span>
+                    <select
+                      value={paperSize}
+                      onChange={(e) =>
+                        setPaperSize(e.target.value as 'A4' | 'Letter')
+                      }
+                      className="px-2 py-1 border border-slate-300 rounded bg-white font-mono-num"
+                    >
+                      <option value="A4">A4 (210 × 297 mm)</option>
+                      <option value="Letter">Letter (215.9 × 279.4 mm)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">Thu phóng bản xem trước:</span>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewScale(0.65)}
+                    className={`px-2 py-0.5 rounded font-mono-num cursor-pointer ${
+                      previewScale === 0.65
+                        ? 'bg-blue-100 text-blue-700 font-bold'
+                        : 'bg-slate-100'
+                    }`}
+                  >
+                    65%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewScale(0.78)}
+                    className={`px-2 py-0.5 rounded font-mono-num cursor-pointer ${
+                      previewScale === 0.78
+                        ? 'bg-blue-100 text-blue-700 font-bold'
+                        : 'bg-slate-100'
+                    }`}
+                  >
+                    78%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewScale(1)}
+                    className={`px-2 py-0.5 rounded font-mono-num cursor-pointer ${
+                      previewScale === 1
+                        ? 'bg-blue-100 text-blue-700 font-bold'
+                        : 'bg-slate-100'
+                    }`}
+                  >
+                    100%
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Multi-Page Preview Container (Bảng In) with built-in Print & PDF buttons */}
+          <div
+            onScroll={handlePreviewScroll}
+            className="bg-slate-200/80 border border-slate-300 rounded-xl p-5 space-y-5 max-h-[780px] overflow-auto"
+          >
+            {/* Top Bar inside Bảng In */}
+            <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                <Layers className="w-4 h-4 text-blue-700" />
+                <span>
+                  Bảng Xem Trước Trang In ({pages.length} trang ·{' '}
+                  {selectedEmployeesList.length} thẻ)
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={selectedEmployeesList.length === 0 || isExportingPdf}
+                  onClick={handleExportPdf}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50 cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  Xuất PDF
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedEmployeesList.length === 0}
+                  onClick={handleDirectPrint}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg disabled:opacity-50 cursor-pointer shadow-xs"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  In Thẻ Ngay ({selectedEmployeesList.length} thẻ)
+                </button>
+              </div>
+            </div>
+
+            {pages.length === 0 ? (
+              <div className="bg-white rounded-xl p-12 text-center border border-slate-200 space-y-3">
+                <Printer className="w-10 h-10 text-slate-300 mx-auto" />
+                <div className="text-sm font-bold text-slate-700">
+                  Chưa có nhân viên nào được chọn để in
+                </div>
+                <div className="text-xs text-slate-500">
+                  Bấm nút bên dưới để chọn tất cả nhân viên và hiển thị bảng in ngay lập tức.
+                </div>
+                <button
+                  type="button"
+                  onClick={selectAllEmployees}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  Chọn Tất Cả Nhân Viên Để In ({employees.length} thẻ)
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-8">
+                {visiblePages.map((page, pageIdx) => (
+                  <div
+                    key={page.pageNumber}
+                    className="flex flex-col items-center w-full"
+                  >
+                    <div className="mb-2.5 flex items-center justify-between w-full max-w-[640px] bg-white px-3.5 py-2 rounded-lg border border-slate-200 text-xs">
+                      <span className="font-bold text-slate-800 font-mono-num">
+                        Trang {page.pageNumber} / {pages.length} ({page.employees.length} thẻ)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => triggerNativeCtrlP(page.employees)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-md cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        In Ngay
+                      </button>
+                    </div>
+
+                    {/* Scaled wrapper for screen preview */}
+                    <div
+                      style={{
+                        width: `${sheetWidthMm * (printMethod === 'cr80_printer' ? 1.3 : previewScale)}mm`,
+                        height: `${sheetHeightMm * (printMethod === 'cr80_printer' ? 1.3 : previewScale)}mm`,
+                      }}
+                      className="relative overflow-hidden shadow-lg bg-white"
+                    >
+                      <div
+                        style={{
+                          transform: `scale(${printMethod === 'cr80_printer' ? 1.3 : previewScale})`,
+                          transformOrigin: 'top left',
+                          width: `${sheetWidthMm}mm`,
+                          height: `${sheetHeightMm}mm`,
+                        }}
+                      >
+                        <div
+                          ref={(el) => {
+                            sheetRefs.current[pageIdx] = el;
+                          }}
+                          className="bg-white box-border"
+                          style={{
+                            width: `${sheetWidthMm}mm`,
+                            height: `${sheetHeightMm}mm`,
+                            padding:
+                              printMethod === 'cr80_printer'
+                                ? '0mm'
+                                : `${marginMm}mm`,
+                          }}
+                        >
+                          {printMethod === 'cr80_printer' ? (
+                            <IdCardPreview
+                              employee={page.employees[0]}
+                              template={selectedTemplate}
+                              cardWidthMm={cardWidthMm}
+                              cardHeightMm={cardHeightMm}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: `repeat(${cols}, ${actualCardW}mm)`,
+                                gap: `${gapMm}mm`,
+                                justifyContent: 'center',
+                              }}
+                            >
+                              {page.employees.map((emp) => (
+                                <IdCardPreview
+                                  key={`${page.pageNumber}-${emp.id}`}
+                                  employee={emp}
+                                  template={selectedTemplate}
+                                  cardWidthMm={cardWidthMm}
+                                  cardHeightMm={cardHeightMm}
+                                  showCropMarks={showCropMarks}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {visiblePages.length < pages.length && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setVisiblePageLimit((prev) =>
+                        Math.min(pages.length, prev + 5)
+                      )
+                    }
+                    className="px-4 py-2 text-xs font-bold text-blue-700 bg-white border border-blue-200 hover:bg-blue-50 rounded-lg shadow-xs cursor-pointer transition-colors"
+                  >
+                    Đang hiển thị {visiblePages.length} / {pages.length} trang xem trước — Cuộn xuống hoặc bấm để xem thêm 5 trang
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Dedicated 1:1 Physical Print Root (Visible ONLY during window.print() / Ctrl+P) */}
+      <div
+        id="printable-cards-root"
+        className="print:m-0 print:p-0 print:bg-white print:border-0 print:shadow-none"
+      >
+        {pages.map((page) => (
+          <div
+            key={`print-page-${page.pageNumber}`}
+            className="print-sheet bg-white box-border print:m-0 print:border-0 print:shadow-none"
+            style={{
+              width: `${sheetWidthMm}mm`,
+              height: `${sheetHeightMm}mm`,
+              padding:
+                printMethod === 'cr80_printer' ? '0mm' : `${marginMm}mm`,
+              backgroundColor: '#ffffff',
+            }}
+          >
+            {printMethod === 'cr80_printer' ? (
+              <IdCardPreview
+                employee={page.employees[0]}
+                template={selectedTemplate}
+                cardWidthMm={cardWidthMm}
+                cardHeightMm={cardHeightMm}
+              />
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${cols}, ${actualCardW}mm)`,
+                  gap: `${gapMm}mm`,
+                  justifyContent: 'center',
+                }}
+              >
+                {page.employees.map((emp) => (
+                  <IdCardPreview
+                    key={`print-card-${page.pageNumber}-${emp.id}`}
+                    employee={emp}
+                    template={selectedTemplate}
+                    cardWidthMm={cardWidthMm}
+                    cardHeightMm={cardHeightMm}
+                    showCropMarks={showCropMarks}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* AI Face Detection & 3x4 Photo Cropper Modal */}
+      <div className="no-print">
+        <FaceCropModal
+          isOpen={isFaceCropModalOpen}
+          onClose={() => setIsFaceCropModalOpen(false)}
+          employees={employees}
+          selectedTemplate={selectedTemplate}
+          targetEmployee={faceCropEmployee}
+          onUpdateEmployeePhoto={async (emp, newPhotoUrl) => {
+            await onUpdateEmployeePhoto(emp, newPhotoUrl);
+            setStatusBanner(
+              `Đã cắt AI và cập nhật ảnh 3×4 cho nhân viên ${emp.fullName} (MSNV: ${emp.msnv})!`
+            );
+            setTimeout(() => setStatusBanner(null), 4000);
+          }}
+          onOpenPrintDialog={onOpenPrintDialog}
+        />
+      </div>
+    </div>
+  );
+};

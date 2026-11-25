@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  .font-serif-card {
+    font-family: 'Noto Serif', 'Times New Roman', Times, serif;
+  }
+
+  .font-times-new-roman {
+    font-family: 'Times New Roman', Times, serif !important;
+  }
+
+  .document-preview-paper,
+  .document-preview-paper *,
+  .document-editor-content,
+  .document-editor-content * {
+    font-family: 'Times New Roman', Times, serif !important;
+  }
+
+  .document-preview-paper {
+    font-size: 13pt;
+    line-height: 1.5;
+    color: #000000;
+    box-sizing: border-box;
+  }
+
+  /* Quy chuẩn kích cỡ chữ 13pt cho các khối nội dung văn bản */
+  .document-preview-paper [style*="font-size: 12pt"],
+  .document-preview-paper [style*="font-size:12pt"] {
+    font-size: 13pt !important;
+  }
+
+  .font-mono-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Native browser Ctrl+P print stylesheet */
+#printable-cards-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 0mm;
+  }
+
+  html,
+  body,
+  #root,
+  #root > div,
+  main,
+  main > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  #printable-cards-root {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  .print-sheet {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    border: none !important;
+    outline: none !important;
+    page-break-after: always;
+    break-after: page;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-sheet:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}
