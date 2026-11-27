@@ -24,6 +24,9 @@ import {
   Building2,
   DollarSign,
   AlertTriangle,
+  Pin,
+  MoreHorizontal,
+  FilePlus2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ContractRecord, Employee } from '../types';
@@ -41,6 +44,7 @@ interface CreatedContractsViewProps {
 
 const STATUS_OPTIONS = [
   'Hiệu lực',
+  'Phụ lục',
   'Đã tái ký',
   'Đã thay thế',
   'Hết hiệu lực',
@@ -52,12 +56,15 @@ const CONTRACT_TYPE_OPTIONS = [
   { code: 'HĐĐT', name: 'Hợp đồng đào tạo' },
   { code: 'HĐXĐTH', name: 'HĐLĐ xác định thời hạn' },
   { code: 'HĐKXĐ', name: 'HĐLĐ không xác định thời hạn' },
+  { code: 'PLHĐ', name: 'Phụ lục hợp đồng' },
 ];
 
 function getStatusBadgeClass(status?: string): string {
   switch (status) {
     case 'Hiệu lực':
       return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'Phụ lục':
+      return 'bg-violet-50 text-violet-700 border-violet-200';
     case 'Đã tái ký':
       return 'bg-blue-50 text-blue-700 border-blue-200';
     case 'Đã thay thế':
@@ -110,6 +117,41 @@ function formatCreatedAt(val: unknown): string {
   });
 }
 
+function getInitials(name?: string): string {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+const AVATAR_COLORS = [
+  'bg-fuchsia-500',
+  'bg-blue-500',
+  'bg-emerald-500',
+  'bg-amber-500',
+  'bg-violet-500',
+  'bg-rose-500',
+  'bg-cyan-600',
+  'bg-indigo-500',
+];
+
+function getAvatarColorClass(name?: string): string {
+  if (!name) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
+function getContractTypeLabel(contractType?: string, contractTypeName?: string): string {
+  if (contractTypeName && contractTypeName.trim()) return contractTypeName.trim();
+  const found = CONTRACT_TYPE_OPTIONS.find((o) => o.code === contractType);
+  if (found) return found.name;
+  return contractType || '-';
+}
+
 export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
   employees,
   onRefreshData,
@@ -144,7 +186,48 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
   // Document Generator & History Modal State
   const [generatorTargetEmployees, setGeneratorTargetEmployees] = useState<Employee[]>([]);
   const [isDocGeneratorOpen, setIsDocGeneratorOpen] = useState(false);
+  const [docGeneratorTemplateHint, setDocGeneratorTemplateHint] = useState<string | undefined>(undefined);
   const [historyEmployee, setHistoryEmployee] = useState<Employee | null>(null);
+
+  // Nhập Lương / Công việc / Bậc / Ngạch trước khi tạo phụ lục
+  const [addendumDrafts, setAddendumDrafts] = useState<
+    Array<{
+      contract: ContractRecord;
+      soPhuLuc: string;
+      ngayHieuLuc: string;
+      luongCu: string;
+      luongMoi: string;
+      bacCu: string;
+      bacMoi: string;
+      ngachCu: string;
+      ngachMoi: string;
+      congViecCu: string;
+      congViecMoi: string;
+    }>
+  >([]);
+
+  // Row Action Menu State (...)
+  const [openMenu, setOpenMenu] = useState<{
+    contract: ContractRecord;
+    top: number;
+    left: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const handleClose = () => setOpenMenu(null);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenu(null);
+    };
+    window.addEventListener('mousedown', handleClose);
+    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handleClose);
+      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openMenu]);
 
   // Notification Modal
   const [notification, setNotification] = useState<{
@@ -497,6 +580,79 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
     }
   };
 
+  const handleOpenAddendumGenerator = (targets: ContractRecord[]) => {
+    if (targets.length === 0) {
+      setNotification({
+        isOpen: true,
+        type: 'warning',
+        title: 'Chưa chọn hợp đồng',
+        message: 'Vui lòng chọn ít nhất một hợp đồng để tạo phụ lục hợp đồng.',
+      });
+      return;
+    }
+    const todayStr = new Date().toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    const drafts = targets.map((c) => {
+      const emp = employeeMap.get(c.employeeId);
+      const currentSalary = c.salary || emp?.luongChinhThuc || c.probationSalary || emp?.luongThuViec || '';
+      const currentJob = emp?.congViec || c.position || emp?.chucVu || '';
+      const currentBac = c.bacLuong || emp?.bacLuong || '';
+      const currentNgach = c.ngachLuong || emp?.ngachLuong || '';
+      const baseNum = String(c.contractNumber || '').trim();
+      return {
+        contract: c,
+        soPhuLuc: baseNum ? `PL-${baseNum}` : 'PL-01',
+        ngayHieuLuc: todayStr,
+        luongCu: currentSalary,
+        luongMoi: currentSalary,
+        bacCu: currentBac,
+        bacMoi: currentBac,
+        ngachCu: currentNgach,
+        ngachMoi: currentNgach,
+        congViecCu: currentJob,
+        congViecMoi: currentJob,
+      };
+    });
+    setAddendumDrafts(drafts);
+  };
+
+  const handleProceedAddendumToTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (addendumDrafts.length === 0) return;
+    const preparedEmployees = addendumDrafts.map((d) => {
+      const baseEmp = buildEmployeeForContract(d.contract);
+      return {
+        ...baseEmp,
+        luongChinhThuc: d.luongMoi,
+        bacLuong: d.bacMoi,
+        ngachLuong: d.ngachMoi,
+        congViec: d.congViecMoi,
+        chucVu: d.congViecMoi,
+        tuNgay: d.ngayHieuLuc || baseEmp.tuNgay,
+        extraData: {
+          ...(baseEmp.extraData || {}),
+          soPhuLuc: d.soPhuLuc,
+          ngayHieuLuc: d.ngayHieuLuc,
+          luongCu: d.luongCu,
+          luongMoi: d.luongMoi,
+          bacCu: d.bacCu,
+          bacMoi: d.bacMoi,
+          ngachCu: d.ngachCu,
+          ngachMoi: d.ngachMoi,
+          congViecCu: d.congViecCu,
+          congViecMoi: d.congViecMoi,
+        },
+      };
+    });
+    setAddendumDrafts([]);
+    setGeneratorTargetEmployees(preparedEmployees);
+    setDocGeneratorTemplateHint('Phụ lục');
+    setIsDocGeneratorOpen(true);
+  };
+
   const handleConfirmDelete = async () => {
     if (!deletingContract) return;
     setIsDeleting(true);
@@ -597,6 +753,18 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Làm mới
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              handleOpenAddendumGenerator(
+                filteredContracts.filter((c) => selectedIds.has(c.id))
+              )
+            }
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition-colors cursor-pointer shadow-xs"
+          >
+            <FilePlus2 className="w-3.5 h-3.5" />
+            Tạo phụ lục {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
           </button>
           <button
             type="button"
@@ -942,7 +1110,7 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <tr className="bg-slate-50/90 border-b border-slate-200 divide-x divide-slate-200/70 text-[13px] font-semibold text-slate-700">
                     <th className="py-3 px-3 w-10 text-center">
                       <input
                         type="checkbox"
@@ -954,27 +1122,38 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                         className="rounded border-slate-300 text-blue-600 cursor-pointer"
                       />
                     </th>
-                    <th className="py-3 px-3">Số HĐ</th>
-                    <th className="py-3 px-3">Nhân viên</th>
-                    <th className="py-3 px-3">Loại hợp đồng</th>
-                    <th className="py-3 px-3">Thời hạn & Hiệu lực</th>
-                    <th className="py-3 px-3">Lương / Ngạch bậc</th>
-                    <th className="py-3 px-3">Trạng thái</th>
-                    <th className="py-3 px-3">Ngày tạo</th>
-                    <th className="py-3 px-3 text-right">Thao tác</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Ngày ký HĐ</th>
+                    <th className="py-3 px-4 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Pin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>Số hợp đồng</span>
+                      </span>
+                    </th>
+                    <th className="py-3 px-4 whitespace-nowrap">Họ và tên NLĐ</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Vị trí công việc</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Loại hợp đồng</th>
+                    <th className="py-3 px-4 whitespace-nowrap">Thời hạn hợp đồng</th>
+                    <th className="py-3 px-3 w-14 text-center"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
+                <tbody className="divide-y divide-slate-100 text-[13px] text-slate-700">
                   {paginatedContracts.map((c) => {
                     const isSelected = selectedIds.has(c.id);
+                    const emp = employeeMap.get(c.employeeId);
+                    const signDateDisplay = c.signDate || c.startDate || '-';
+                    const positionDisplay = emp?.congViec || c.position || emp?.chucVu || '-';
+                    const contractTypeDisplay = getContractTypeLabel(c.contractType, c.contractTypeName);
+                    const durationDisplay = c.duration || '-';
+                    const isMenuOpen = openMenu?.contract.id === c.id;
+
                     return (
                       <tr
                         key={c.id}
-                        className={`hover:bg-blue-50/40 transition-colors ${
-                          isSelected ? 'bg-blue-50/60' : ''
+                        className={`hover:bg-slate-50/90 transition-colors ${
+                          isSelected ? 'bg-blue-50/50' : 'bg-white'
                         }`}
                       >
-                        <td className="py-3 px-3 text-center">
+                        <td className="py-3.5 px-3 text-center">
                           <input
                             type="checkbox"
                             checked={isSelected}
@@ -982,156 +1161,71 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                             className="rounded border-slate-300 text-blue-600 cursor-pointer"
                           />
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200/70 px-2 py-0.5 rounded-md">
-                              {c.contractNumber || '—'}
-                            </span>
-                            {c.isSigned ? (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                Đã ký
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
-                                Chưa ký
-                              </span>
-                            )}
-                          </div>
-                          {c.signDate && (
-                            <div className="text-[11px] text-slate-400 mt-1">
-                              Ký: {c.signDate}
-                            </div>
-                          )}
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-700">
+                          {signDateDisplay}
                         </td>
-                        <td className="py-3 px-3">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-slate-900">{c.fullName || '—'}</span>
-                            {(contractCountByEmployee.get(c.employeeId) || 0) > 1 && (
-                              <span
-                                className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200"
-                                title="Nhân viên này có nhiều hợp đồng trong hệ thống"
-                              >
-                                {contractCountByEmployee.get(c.employeeId)} HĐ
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                            <span className="font-mono font-semibold text-slate-700">
-                              {c.msnv || '—'}
-                            </span>
-                            {c.department && (
-                              <>
-                                <span>•</span>
-                                <span className="truncate max-w-[180px]" title={c.department}>
-                                  {c.department}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                          {c.position && (
-                            <div className="text-[11px] text-slate-400 truncate max-w-[220px]">
-                              {c.position}
-                            </div>
-                          )}
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-800 font-medium">
+                          {c.contractNumber || '-'}
                         </td>
-                        <td className="py-3 px-3">
-                          <span className="inline-block font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md">
-                            {c.contractType || '—'}
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${getAvatarColorClass(
+                                c.fullName
+                              )}`}
+                            >
+                              {getInitials(c.fullName)}
+                            </span>
+                            <span className="text-slate-800 font-medium truncate max-w-[200px]" title={c.fullName || ''}>
+                              {c.fullName || '-'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-700">
+                          <span className="block truncate max-w-[200px]" title={positionDisplay}>
+                            {positionDisplay}
                           </span>
-                          {c.contractTypeName && (
-                            <div className="text-[11px] text-slate-500 mt-1 max-w-[180px] truncate" title={c.contractTypeName}>
-                              {c.contractTypeName}
-                            </div>
-                          )}
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          <div className="font-semibold text-slate-700">{c.duration || '—'}</div>
-                          <div className="text-[11px] text-slate-500 mt-0.5">
-                            {c.startDate || '—'} → {c.endDate || 'Không xác định'}
-                          </div>
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-700">
+                          <span className="block truncate max-w-[180px]" title={contractTypeDisplay}>
+                            {contractTypeDisplay}
+                          </span>
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          {c.salary || c.probationSalary ? (
-                            <div>
-                              {c.salary && (
-                                <div className="text-slate-800 font-semibold">
-                                  CT: {c.salary}
-                                </div>
-                              )}
-                              {c.probationSalary && (
-                                <div className="text-slate-500 text-[11px]">
-                                  TV: {c.probationSalary}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                          {(c.bacLuong || c.ngachLuong) && (
-                            <div className="text-[11px] text-slate-400 mt-0.5">
-                              {c.ngachLuong ? `Ngạch ${c.ngachLuong}` : ''}{' '}
-                              {c.bacLuong ? `Bậc ${c.bacLuong}` : ''}
-                            </div>
-                          )}
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-700">
+                          {durationDisplay}
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${getStatusBadgeClass(
-                              c.status
-                            )}`}
+                        <td className="py-3.5 px-3 whitespace-nowrap text-center">
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isMenuOpen) {
+                                setOpenMenu(null);
+                                return;
+                              }
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuWidth = 208;
+                              const menuHeight = 208;
+                              const left = Math.max(
+                                8,
+                                Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)
+                              );
+                              const openUpwards = rect.bottom + menuHeight > window.innerHeight - 12;
+                              const top = openUpwards
+                                ? Math.max(8, rect.top - menuHeight - 4)
+                                : rect.bottom + 4;
+                              setOpenMenu({ contract: c, top, left });
+                            }}
+                            className={`inline-flex items-center justify-center w-8 h-8 rounded-lg transition-colors cursor-pointer ${
+                              isMenuOpen
+                                ? 'bg-slate-200/80 text-slate-800'
+                                : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                            }`}
+                            title="Thao tác"
                           >
-                            {c.status || '—'}
-                          </span>
-                          {c.note && (
-                            <div
-                              className="text-[11px] text-slate-400 mt-1 max-w-[160px] truncate"
-                              title={c.note}
-                            >
-                              {c.note}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 whitespace-nowrap text-[11px] text-slate-500">
-                          {formatCreatedAt(c.createdAt)}
-                        </td>
-                        <td className="py-3 px-3 whitespace-nowrap text-right">
-                          <div className="inline-flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setGeneratorTargetEmployees([buildEmployeeForContract(c)]);
-                                setIsDocGeneratorOpen(true);
-                              }}
-                              className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
-                              title="In / Xuất văn bản hợp đồng"
-                            >
-                              <Printer className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEdit(c)}
-                              className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
-                              title="Sửa thông tin hợp đồng"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setHistoryEmployee(buildEmployeeForContract(c))}
-                              className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                              title="Lịch sử hợp đồng của nhân viên"
-                            >
-                              <History className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeletingContract(c)}
-                              className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Xóa hợp đồng"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
+                            <MoreHorizontal className="w-4 h-4" />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -1139,6 +1233,78 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                 </tbody>
               </table>
             </div>
+
+            {openMenu && (
+              <div
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{ top: openMenu.top, left: openMenu.left }}
+                className="fixed z-50 w-52 bg-white rounded-xl border border-slate-200 shadow-lg py-1.5 text-xs animate-in fade-in zoom-in-95 duration-100"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    setGeneratorTargetEmployees([buildEmployeeForContract(target)]);
+                    setDocGeneratorTemplateHint(undefined);
+                    setIsDocGeneratorOpen(true);
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-slate-700 hover:bg-slate-50 hover:text-blue-600 transition-colors cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span className="font-medium">In / Xuất văn bản</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    handleOpenAddendumGenerator([target]);
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-slate-700 hover:bg-slate-50 hover:text-violet-600 transition-colors cursor-pointer"
+                >
+                  <FilePlus2 className="w-4 h-4 text-violet-600 shrink-0" />
+                  <span className="font-medium">Tạo phụ lục hợp đồng</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    handleOpenEdit(target);
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-slate-700 hover:bg-slate-50 hover:text-amber-600 transition-colors cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span className="font-medium">Chỉnh sửa hợp đồng</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    setHistoryEmployee(buildEmployeeForContract(target));
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors cursor-pointer"
+                >
+                  <History className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="font-medium">Lịch sử hợp đồng</span>
+                </button>
+                <div className="my-1 border-t border-slate-100" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    setDeletingContract(target);
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4 shrink-0" />
+                  <span className="font-medium">Xóa hợp đồng</span>
+                </button>
+              </div>
+            )}
 
             {/* Footer phân trang của bảng */}
             <div className="p-4 border-t border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
@@ -1532,6 +1698,225 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
         </div>
       )}
 
+      {/* Nhập bảng lương, công việc, bậc ngạch trước khi tạo phụ lục */}
+      {addendumDrafts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-5xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 bg-violet-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+                  <FilePlus2 className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold">
+                    Nhập bảng lương, công việc, bậc ngạch trước khi tạo phụ lục
+                  </h3>
+                  <p className="text-xs text-violet-200 mt-0.5">
+                    Đang chọn {addendumDrafts.length} hợp đồng • Sau khi xác nhận sẽ chuyển sang chọn mẫu văn bản & in phụ lục
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddendumDrafts([])}
+                className="p-1.5 rounded-lg text-violet-200 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleProceedAddendumToTemplate} className="p-5 space-y-4 text-xs">
+              <div className="overflow-x-auto max-h-[62vh] border border-slate-200 rounded-xl">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 text-[11px] font-bold text-slate-700">
+                    <tr>
+                      <th className="py-2.5 px-3 whitespace-nowrap">Nhân viên / Số HĐ</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Số phụ lục</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Ngày hiệu lực</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Lương cũ → Mới</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Bậc cũ → Mới</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Ngạch cũ → Mới</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Công việc cũ → Mới</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {addendumDrafts.map((d, idx) => (
+                      <tr key={d.contract.id} className="hover:bg-slate-50/60 align-top">
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="font-bold text-slate-800">{d.contract.fullName || '—'}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {d.contract.msnv || '—'} • HĐ: {d.contract.contractNumber || '—'}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.soPhuLuc}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, soPhuLuc: e.target.value } : item
+                                )
+                              )
+                            }
+                            className="w-28 px-2.5 py-1.5 border border-slate-200 rounded-lg font-mono focus:outline-none focus:border-violet-500"
+                            required
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.ngayHieuLuc}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, ngayHieuLuc: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="dd/mm/yyyy"
+                            className="w-28 px-2.5 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:border-violet-500"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5 space-y-1">
+                          <input
+                            type="text"
+                            value={d.luongCu}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, luongCu: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Lương cũ"
+                            className="w-32 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 focus:bg-white focus:outline-none focus:border-violet-500"
+                          />
+                          <input
+                            type="text"
+                            value={d.luongMoi}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, luongMoi: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Lương mới"
+                            className="w-32 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold text-slate-900 focus:outline-none focus:border-violet-600"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5 space-y-1">
+                          <input
+                            type="text"
+                            value={d.bacCu}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, bacCu: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Bậc cũ"
+                            className="w-24 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 focus:bg-white focus:outline-none focus:border-violet-500"
+                          />
+                          <input
+                            type="text"
+                            value={d.bacMoi}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, bacMoi: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Bậc mới"
+                            className="w-24 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold text-slate-900 focus:outline-none focus:border-violet-600"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5 space-y-1">
+                          <input
+                            type="text"
+                            value={d.ngachCu}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, ngachCu: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Ngạch cũ"
+                            className="w-24 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 focus:bg-white focus:outline-none focus:border-violet-500"
+                          />
+                          <input
+                            type="text"
+                            value={d.ngachMoi}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, ngachMoi: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Ngạch mới"
+                            className="w-24 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold text-slate-900 focus:outline-none focus:border-violet-600"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5 space-y-1">
+                          <input
+                            type="text"
+                            value={d.congViecCu}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, congViecCu: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Công việc cũ"
+                            className="w-48 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 focus:bg-white focus:outline-none focus:border-violet-500"
+                          />
+                          <input
+                            type="text"
+                            value={d.congViecMoi}
+                            onChange={(e) =>
+                              setAddendumDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, congViecMoi: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Công việc mới"
+                            className="w-48 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold text-slate-900 focus:outline-none focus:border-violet-600"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAddendumDrafts([])}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-violet-600 text-white hover:bg-violet-700 cursor-pointer shadow-xs"
+                >
+                  <Printer className="w-4 h-4" />
+                  Tiếp tục chọn mẫu & In phụ lục
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Document Generator Modal */}
       {isDocGeneratorOpen && (
         <ErrorBoundary>
@@ -1539,6 +1924,7 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
             isOpen={isDocGeneratorOpen}
             onClose={() => setIsDocGeneratorOpen(false)}
             targetEmployees={generatorTargetEmployees}
+            initialTemplateName={docGeneratorTemplateHint}
             onSavedEmployees={(updated) => {
               if (onBatchUpdateEmployees) onBatchUpdateEmployees(updated);
               loadContracts();

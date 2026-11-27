@@ -314,6 +314,21 @@ export function buildEmployeeReplacements(
     '#Ngạch, bậc#': [emp.ngachLuong, emp.bacLuong].filter(Boolean).join(', '),
     '#Bậc, ngạch#': [emp.bacLuong, emp.ngachLuong].filter(Boolean).join(', '),
 
+    // Biến Phụ lục hợp đồng (Cũ -> Mới)
+    '#Số phụ lục#': String(emp.extraData?.soPhuLuc || `PL-${contractNumVal}`),
+    '#Ngày ký HĐ#': emp.ngayKyHopDong || emp.tuNgay || joinDateVal,
+    '#Ngày hiệu lực#': String(emp.extraData?.ngayHieuLuc || emp.tuNgay || ''),
+    '#Lương cũ#': formatMoneyVnd(String(emp.extraData?.luongCu ?? emp.luongThuViec ?? '')),
+    '#Lương mới#': formatMoneyVnd(String(emp.extraData?.luongMoi ?? emp.luongChinhThuc ?? '')),
+    '#Bậc cũ#': String(emp.extraData?.bacCu ?? ''),
+    '#Ngạch cũ#': String(emp.extraData?.ngachCu ?? ''),
+    '#Bậc mới#': String(emp.extraData?.bacMoi ?? emp.bacLuong ?? ''),
+    '#Ngạch mới#': String(emp.extraData?.ngachMoi ?? emp.ngachLuong ?? ''),
+    '#Công việc cũ#': String(emp.extraData?.congViecCu ?? ''),
+    '#Chức vụ cũ#': String(emp.extraData?.congViecCu ?? ''),
+    '#Công việc mới#': String(emp.extraData?.congViecMoi ?? computedWork ?? ''),
+    '#Chức vụ mới#': String(emp.extraData?.congViecMoi ?? computedJobTitle ?? ''),
+
     // CCCD / CMND
     '#Số CCCD#': emp.cccd || '',
     '#CCCD#': emp.cccd || '',

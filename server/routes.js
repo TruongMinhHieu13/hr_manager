@@ -3849,6 +3849,179 @@ async function ensureDefaultDocumentTemplates() {
       'QUYẾT ĐỊNH Về việc: Chấm dứt hợp đồng lao động (QĐNV)'
     ]);
 
+    // Mẫu Phụ lục hợp đồng lao động mặc định (tự động bổ sung hoặc cập nhật nếu chưa bị chỉnh sửa)
+    await pool.query(`
+      INSERT INTO document_templates (id, name, category, file_name, content_html, raw_text)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id) DO UPDATE
+      SET content_html = EXCLUDED.content_html
+      WHERE document_templates.updated_at = document_templates.created_at
+    `, [
+      'doc_tpl_phu_luc_hdld',
+      'Phụ lục hợp đồng lao động',
+      'Hợp đồng',
+      'Phu_luc_hop_dong_lao_dong.docx',
+      `<table style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+  <tr>
+    <td style="width: 48%; vertical-align: top; text-align: center; font-size: 11pt; font-weight: bold;">
+      CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT<br/>
+      CHI NHÁNH VIETSUN ĐỒNG NAI
+    </td>
+    <td style="width: 52%; vertical-align: top; text-align: center; font-size: 11pt;">
+      <div style="font-weight: bold;">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
+      <div style="font-weight: bold; text-decoration: underline;">Độc lập – Tự do – Hạnh phúc</div>
+      <div style="font-style: italic; margin-top: 6px;">Xuân Hòa, #Hôm nay#</div>
+    </td>
+  </tr>
+</table>
+
+<div style="text-align: center; font-size: 15pt; font-weight: bold; margin-top: 10px; margin-bottom: 4px;">PHỤ LỤC HỢP ĐỒNG LAO ĐỘNG</div>
+<div style="text-align: center; font-size: 11.5pt; font-weight: bold; margin-bottom: 4px;">Số: #Số phụ lục#/HĐLĐ-VSDN/#Năm#/#MSNV#/#Bộ phận con#</div>
+<div style="text-align: center; font-style: italic; font-size: 11pt; margin-bottom: 10px;">Căn cứ Hợp đồng Lao động số #Số hợp đồng# ký kết ngày #Ngày ký HĐ#</div>
+
+<div style="font-size: 11.5pt; font-weight: bold; margin-bottom: 6px;">Chúng tôi, gồm:</div>
+
+<table style="width: 100%; border-collapse: collapse; font-size: 11pt; margin-bottom: 10px;">
+  <tr>
+    <td style="width: 30%; padding: 3px 4px; font-weight: bold; vertical-align: top;">Bên A: Người sử dụng lao động (NSDLĐ)</td>
+    <td colspan="3" style="padding: 3px 4px; font-weight: bold;">: CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ</td>
+    <td colspan="3" style="padding: 3px 4px;">: Lô III-3A, Đường CN1, Nhóm CN III, KCN Tân Bình, Phường Tây Thạnh, Tp.Hồ Chí Minh</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Mã số thuế</td>
+    <td colspan="3" style="padding: 3px 4px;">: 0305027542</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Đại diện</td>
+    <td colspan="3" style="padding: 3px 4px; font-weight: bold;">: ĐỖ ĐẶNG QUỐC HUY</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Chức vụ</td>
+    <td colspan="3" style="padding: 3px 4px;">: GIÁM ĐỐC ĐIỀU HÀNH CHI NHÁNH</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Số CCCD</td>
+    <td style="width: 32%; padding: 3px 4px;">: 075086021801</td>
+    <td colspan="2" style="padding: 3px 4px;">- Ngày cấp CCCD: 19/08/2022</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nơi cấp CCCD</td>
+    <td colspan="3" style="padding: 3px 4px;">: Cục CSQLHCVTTXH</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ thường trú<br/>Điện thoại<br/>Địa điểm làm việc</td>
+    <td colspan="3" style="padding: 3px 4px; vertical-align: top;">
+      : Ấp Xuân Tâm 1, Xuân Hòa, Tp.Đồng Nai<br/>
+      : 0938813801<br/>
+      : Vietsun Đồng Nai – Chi nhánh công ty Cổ Phần Đầu Tư Mặt Trời Việt – Tổ 1, Ấp Hòa Hưng, Xã Xuân Hòa, Tp.Đồng Nai.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="4" style="padding: 4px; font-style: italic;">Căn cứ giấy Ủy quyền số 01/GUQ-VĐ/2025 của Phó Tổng Giám Đốc Công ty Cổ Phần Đầu Tư Mặt Trời Việt, người đại diện pháp luật chi nhánh Vietsun Đồng Nai.</td>
+  </tr>
+  <tr>
+    <td style="padding: 4px 4px 3px 4px; font-weight: bold;">Bên B: Người Lao động (NLĐ)</td>
+    <td style="padding: 4px 4px 3px 4px; font-weight: bold;">: #Họ và tên#</td>
+    <td colspan="2" style="padding: 4px 4px 3px 4px;">- Quốc tịch: Việt Nam</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Ngày sinh</td>
+    <td style="padding: 3px 4px;">: #Ngày sinh#</td>
+    <td colspan="2" style="padding: 3px 4px;">Tại : #Nơi sinh#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nghề nghiệp</td>
+    <td colspan="3" style="padding: 3px 4px;">: #Công việc#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ thường trú</td>
+    <td colspan="3" style="padding: 3px 4px;">: #Địa chỉ thường trú#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Số CCCD/Số Hộ Chiếu</td>
+    <td style="padding: 3px 4px;">: #Số CCCD#</td>
+    <td colspan="2" style="padding: 3px 4px;">- Ngày cấp : #Ngày cấp CCCD#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nơi cấp</td>
+    <td colspan="3" style="padding: 3px 4px;">: #Nơi cấp CCCD#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Giấy phép LĐ số</td>
+    <td colspan="3" style="padding: 3px 4px;">: ... &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; - Ngày cấp : ...</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nơi cấp</td>
+    <td colspan="3" style="padding: 3px 4px;">: ...</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Điện thoại</td>
+    <td colspan="3" style="padding: 3px 4px;">: #Số điện thoại#</td>
+  </tr>
+</table>
+
+<div style="font-size: 11pt; margin-bottom: 8px; text-align: justify;">
+  Sau khi bàn bạc và thống nhất, hai bên thỏa thuận ký kết Phụ lục hợp đồng lao động để bổ sung và cam kết thực hiện đúng các điều khoản sau đây:
+</div>
+
+<div style="font-size: 11pt; margin-bottom: 6px;">
+  <strong>Điều 1.</strong> Kể từ ngày <strong>#Ngày hiệu lực#</strong> điều chỉnh công việc, mức lương của Ông / bà: <strong>#Họ và tên#</strong> như sau:
+</div>
+
+<table style="width: 100%; border-collapse: collapse; font-size: 11pt; margin-bottom: 10px;" border="1">
+  <thead>
+    <tr style="background-color: #f3f4f6; font-weight: bold; text-align: center;">
+      <th style="border: 1px solid #333; padding: 6px 8px; width: 28%;">Nội dung thay đổi</th>
+      <th style="border: 1px solid #333; padding: 6px 8px; width: 36%;">Cũ</th>
+      <th style="border: 1px solid #333; padding: 6px 8px; width: 36%;">Mới</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="border: 1px solid #333; padding: 6px 8px; font-weight: bold;">Mức lương</td>
+      <td style="border: 1px solid #333; padding: 6px 8px;">#Lương cũ# đ</td>
+      <td style="border: 1px solid #333; padding: 6px 8px; font-weight: bold;">#Lương mới# đ</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid #333; padding: 6px 8px; font-weight: bold;">Bậc / Ngạch</td>
+      <td style="border: 1px solid #333; padding: 6px 8px;">Bậc : #Bậc cũ# - Ngạch : #Ngạch cũ#</td>
+      <td style="border: 1px solid #333; padding: 6px 8px;">Bậc : #Bậc mới# - Ngạch : #Ngạch mới#</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid #333; padding: 6px 8px; font-weight: bold;">Chức vụ</td>
+      <td style="border: 1px solid #333; padding: 6px 8px;">#Công việc cũ#</td>
+      <td style="border: 1px solid #333; padding: 6px 8px; font-weight: bold;">#Công việc mới#</td>
+    </tr>
+  </tbody>
+</table>
+
+<div style="font-size: 11pt; margin-bottom: 4px;"><strong>Điều 2. Điều khoản thi hành</strong></div>
+<div style="font-size: 11pt; margin-bottom: 6px; text-align: justify; line-height: 1.45;">
+  Phụ lục này là một bộ phận của Hợp đồng lao động số <strong>#Số hợp đồng#</strong> ký kết ngày #Ngày ký HĐ#, được làm thành 02 (hai) bản có giá trị ngang nhau, mỗi bên giữ một bản và có hiệu lực từ ngày #Ngày hiệu lực# đến khi có Phụ lục thay thế khác.
+</div>
+<div style="font-size: 11pt; margin-bottom: 14px; text-align: justify;">
+  Hai bên đã đọc Phụ lục Hợp đồng, đã hiểu và đồng ý tất cả các điều khoản ghi trong Phụ lục Hợp đồng và cùng ký vào Phụ lục Hợp đồng này.
+</div>
+
+<table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 11pt; margin-top: 16px;">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <div style="font-weight: bold;">NGƯỜI SỬ DỤNG LAO ĐỘNG</div>
+      <div style="font-weight: bold; margin-bottom: 58px;">GIÁM ĐỐC CHI NHÁNH</div>
+      <div style="font-weight: bold;">ĐỖ ĐẶNG QUỐC HUY</div>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <div style="font-weight: bold; margin-bottom: 74px;">NGƯỜI LAO ĐỘNG</div>
+      <div style="font-weight: bold;">#Họ và tên#</div>
+    </td>
+  </tr>
+</table>`,
+      'PHỤ LỤC HỢP ĐỒNG LAO ĐỘNG'
+    ]);
+
     const check = await pool.query('SELECT count(*) FROM document_templates WHERE id != $1', ['doc_tpl_qdnv']);
     if (parseInt(check.rows[0].count, 10) > 0) return;
 
