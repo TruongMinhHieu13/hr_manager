@@ -152,6 +152,13 @@ function getContractTypeLabel(contractType?: string, contractTypeName?: string):
   return contractType || '-';
 }
 
+function formatMoneyInput(val?: string): string {
+  if (!val) return '';
+  const digits = String(val).replace(/\D/g, '');
+  if (!digits) return '';
+  return Number(digits).toLocaleString('vi-VN');
+}
+
 export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
   employees,
   onRefreshData,
@@ -203,6 +210,18 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
       ngachMoi: string;
       congViecCu: string;
       congViecMoi: string;
+    }>
+  >([]);
+
+  // Nhập mức tiền Hiệu quả công việc (HQCV) trước khi tạo HĐ HQCV
+  const [hqcvDrafts, setHqcvDrafts] = useState<
+    Array<{
+      contract: ContractRecord;
+      soHdHqcv: string;
+      ngayHieuLuc: string;
+      tienHqcv: string;
+      congViec: string;
+      ghiChuHqcv: string;
     }>
   >([]);
 
@@ -597,7 +616,9 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
     });
     const drafts = targets.map((c) => {
       const emp = employeeMap.get(c.employeeId);
-      const currentSalary = c.salary || emp?.luongChinhThuc || c.probationSalary || emp?.luongThuViec || '';
+      const currentSalary = formatMoneyInput(
+        c.salary || emp?.luongChinhThuc || c.probationSalary || emp?.luongThuViec || ''
+      );
       const currentJob = emp?.congViec || c.position || emp?.chucVu || '';
       const currentBac = c.bacLuong || emp?.bacLuong || '';
       const currentNgach = c.ngachLuong || emp?.ngachLuong || '';
@@ -650,6 +671,61 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
     setAddendumDrafts([]);
     setGeneratorTargetEmployees(preparedEmployees);
     setDocGeneratorTemplateHint('Phụ lục');
+    setIsDocGeneratorOpen(true);
+  };
+
+  const handleOpenHqcvGenerator = (targets: ContractRecord[]) => {
+    if (targets.length === 0) {
+      setNotification({
+        isOpen: true,
+        type: 'warning',
+        title: 'Chưa chọn hợp đồng',
+        message: 'Vui lòng chọn ít nhất một hợp đồng để tạo HĐ HQCV.',
+      });
+      return;
+    }
+    const todayStr = new Date().toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    const drafts = targets.map((c) => {
+      const emp = employeeMap.get(c.employeeId);
+      const baseNum = String(c.contractNumber || '').trim();
+      return {
+        contract: c,
+        soHdHqcv: baseNum ? `HQCV-${baseNum}` : 'HQCV-01',
+        ngayHieuLuc: todayStr,
+        tienHqcv: '',
+        congViec: emp?.congViec || c.position || emp?.chucVu || '',
+        ghiChuHqcv: '',
+      };
+    });
+    setHqcvDrafts(drafts);
+  };
+
+  const handleProceedHqcvToTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (hqcvDrafts.length === 0) return;
+    const preparedEmployees = hqcvDrafts.map((d) => {
+      const baseEmp = buildEmployeeForContract(d.contract);
+      return {
+        ...baseEmp,
+        congViec: d.congViec,
+        chucVu: d.congViec,
+        tuNgay: d.ngayHieuLuc || baseEmp.tuNgay,
+        extraData: {
+          ...(baseEmp.extraData || {}),
+          soHdHqcv: d.soHdHqcv,
+          ngayHieuLuc: d.ngayHieuLuc,
+          tienHqcv: d.tienHqcv,
+          ghiChuHqcv: d.ghiChuHqcv,
+        },
+      };
+    });
+    setHqcvDrafts([]);
+    setGeneratorTargetEmployees(preparedEmployees);
+    setDocGeneratorTemplateHint('HQCV');
     setIsDocGeneratorOpen(true);
   };
 
@@ -765,6 +841,18 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
           >
             <FilePlus2 className="w-3.5 h-3.5" />
             Tạo phụ lục {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              handleOpenHqcvGenerator(
+                filteredContracts.filter((c) => selectedIds.has(c.id))
+              )
+            }
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-600 text-white hover:bg-amber-700 transition-colors cursor-pointer shadow-xs"
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+            Tạo HĐ HQCV {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
           </button>
           <button
             type="button"
@@ -1206,7 +1294,7 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                               }
                               const rect = e.currentTarget.getBoundingClientRect();
                               const menuWidth = 208;
-                              const menuHeight = 208;
+                              const menuHeight = 244;
                               const left = Math.max(
                                 8,
                                 Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)
@@ -1265,6 +1353,18 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                 >
                   <FilePlus2 className="w-4 h-4 text-violet-600 shrink-0" />
                   <span className="font-medium">Tạo phụ lục hợp đồng</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = openMenu.contract;
+                    setOpenMenu(null);
+                    handleOpenHqcvGenerator([target]);
+                  }}
+                  className="w-full px-3.5 py-2 text-left flex items-center gap-2.5 text-slate-700 hover:bg-slate-50 hover:text-amber-600 transition-colors cursor-pointer"
+                >
+                  <DollarSign className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span className="font-medium">Tạo HĐ HQCV</span>
                 </button>
                 <button
                   type="button"
@@ -1781,29 +1881,33 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                         <td className="py-2.5 px-2.5 space-y-1">
                           <input
                             type="text"
+                            inputMode="numeric"
                             value={d.luongCu}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const formatted = formatMoneyInput(e.target.value);
                               setAddendumDrafts((prev) =>
                                 prev.map((item, i) =>
-                                  i === idx ? { ...item, luongCu: e.target.value } : item
+                                  i === idx ? { ...item, luongCu: formatted } : item
                                 )
-                              )
-                            }
+                              );
+                            }}
                             placeholder="Lương cũ"
-                            className="w-32 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 focus:bg-white focus:outline-none focus:border-violet-500"
+                            className="w-32 px-2.5 py-1 border border-slate-200 rounded-lg bg-slate-50 text-slate-600 font-mono focus:bg-white focus:outline-none focus:border-violet-500"
                           />
                           <input
                             type="text"
+                            inputMode="numeric"
                             value={d.luongMoi}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const formatted = formatMoneyInput(e.target.value);
                               setAddendumDrafts((prev) =>
                                 prev.map((item, i) =>
-                                  i === idx ? { ...item, luongMoi: e.target.value } : item
+                                  i === idx ? { ...item, luongMoi: formatted } : item
                                 )
-                              )
-                            }
+                              );
+                            }}
                             placeholder="Lương mới"
-                            className="w-32 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold text-slate-900 focus:outline-none focus:border-violet-600"
+                            className="w-32 px-2.5 py-1 border border-violet-300 rounded-lg font-semibold font-mono text-slate-900 focus:outline-none focus:border-violet-600"
                           />
                         </td>
                         <td className="py-2.5 px-2.5 space-y-1">
@@ -1910,6 +2014,159 @@ export const CreatedContractsView: React.FC<CreatedContractsViewProps> = ({
                 >
                   <Printer className="w-4 h-4" />
                   Tiếp tục chọn mẫu & In phụ lục
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Nhập mức tiền Hiệu quả công việc (HQCV) trước khi tạo HĐ HQCV */}
+      {hqcvDrafts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-4xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 bg-amber-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
+                  <DollarSign className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold">
+                    Nhập mức tiền Hiệu quả công việc (HQCV)
+                  </h3>
+                  <p className="text-xs text-amber-100 mt-0.5">
+                    Đang chọn {hqcvDrafts.length} hợp đồng • Sau khi xác nhận sẽ chuyển sang chọn mẫu văn bản & in HĐ HQCV
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHqcvDrafts([])}
+                className="p-1.5 rounded-lg text-amber-100 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleProceedHqcvToTemplate} className="p-5 space-y-4 text-xs">
+              <div className="overflow-x-auto max-h-[62vh] border border-slate-200 rounded-xl">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 text-[11px] font-bold text-slate-700">
+                    <tr>
+                      <th className="py-2.5 px-3 whitespace-nowrap">Nhân viên / Số HĐ</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Số HĐ HQCV</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Ngày hiệu lực</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Mức tiền HQCV</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Công việc / Vị trí</th>
+                      <th className="py-2.5 px-2.5 whitespace-nowrap">Ghi chú HQCV</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {hqcvDrafts.map((d, idx) => (
+                      <tr key={d.contract.id} className="hover:bg-slate-50/60">
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="font-bold text-slate-800">{d.contract.fullName || '—'}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {d.contract.msnv || '—'} • HĐ: {d.contract.contractNumber || '—'}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.soHdHqcv}
+                            onChange={(e) =>
+                              setHqcvDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, soHdHqcv: e.target.value } : item
+                                )
+                              )
+                            }
+                            className="w-32 px-2.5 py-1.5 border border-slate-200 rounded-lg font-mono focus:outline-none focus:border-amber-500"
+                            required
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.ngayHieuLuc}
+                            onChange={(e) =>
+                              setHqcvDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, ngayHieuLuc: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="dd/mm/yyyy"
+                            className="w-28 px-2.5 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:border-amber-500"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={d.tienHqcv}
+                            onChange={(e) => {
+                              const formatted = formatMoneyInput(e.target.value);
+                              setHqcvDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, tienHqcv: formatted } : item
+                                )
+                              );
+                            }}
+                            placeholder="VD: 5.000.000"
+                            className="w-36 px-2.5 py-1.5 border border-amber-300 rounded-lg font-semibold font-mono text-slate-900 focus:outline-none focus:border-amber-600"
+                            required
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.congViec}
+                            onChange={(e) =>
+                              setHqcvDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, congViec: e.target.value } : item
+                                )
+                              )
+                            }
+                            className="w-44 px-2.5 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:border-amber-500"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2.5">
+                          <input
+                            type="text"
+                            value={d.ghiChuHqcv}
+                            onChange={(e) =>
+                              setHqcvDrafts((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, ghiChuHqcv: e.target.value } : item
+                                )
+                              )
+                            }
+                            placeholder="Ghi chú..."
+                            className="w-40 px-2.5 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:border-amber-500"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setHqcvDrafts([])}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-amber-600 text-white hover:bg-amber-700 cursor-pointer shadow-xs"
+                >
+                  <Printer className="w-4 h-4" />
+                  Tiếp tục chọn mẫu & In HĐ HQCV
                 </button>
               </div>
             </form>

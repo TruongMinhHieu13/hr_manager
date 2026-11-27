@@ -329,6 +329,14 @@ export function buildEmployeeReplacements(
     '#Công việc mới#': String(emp.extraData?.congViecMoi ?? computedWork ?? ''),
     '#Chức vụ mới#': String(emp.extraData?.congViecMoi ?? computedJobTitle ?? ''),
 
+    // Biến Hợp đồng Hiệu quả công việc (HQCV)
+    '#Số HĐ HQCV#': String(emp.extraData?.soHdHqcv || `HQCV-${contractNumVal}`),
+    '#Tiền HQCV#': formatMoneyVnd(String(emp.extraData?.tienHqcv ?? '')),
+    '#Mức tiền HQCV#': formatMoneyVnd(String(emp.extraData?.tienHqcv ?? '')),
+    '#Hiệu quả công việc#': formatMoneyVnd(String(emp.extraData?.tienHqcv ?? '')),
+    '#Lương HQCV#': formatMoneyVnd(String(emp.extraData?.tienHqcv ?? '')),
+    '#Ghi chú HQCV#': String(emp.extraData?.ghiChuHqcv ?? ''),
+
     // CCCD / CMND
     '#Số CCCD#': emp.cccd || '',
     '#CCCD#': emp.cccd || '',

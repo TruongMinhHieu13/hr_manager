@@ -4022,6 +4022,163 @@ async function ensureDefaultDocumentTemplates() {
       'PHỤ LỤC HỢP ĐỒNG LAO ĐỘNG'
     ]);
 
+    // Mẫu Phụ lục HĐ HQCV (Thưởng hiệu quả vị trí công việc) mặc định
+    await pool.query(`
+      INSERT INTO document_templates (id, name, category, file_name, content_html, raw_text)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id) DO UPDATE
+      SET content_html = EXCLUDED.content_html
+      WHERE document_templates.updated_at = document_templates.created_at
+    `, [
+      'doc_tpl_phu_luc_hqcv',
+      'Phụ lục HĐ HQCV (Thưởng hiệu quả công việc)',
+      'Hợp đồng',
+      'Phu_luc_HD_HQCV.docx',
+      `<table style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+  <tr>
+    <td style="width: 48%; vertical-align: top; text-align: center; font-size: 11pt; font-weight: bold;">
+      CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT<br/>
+      CHI NHÁNH VIETSUN ĐỒNG NAI
+    </td>
+    <td style="width: 52%; vertical-align: top; text-align: center; font-size: 11pt;">
+      <div style="font-weight: bold;">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
+      <div style="font-weight: bold; text-decoration: underline;">Độc lập – Tự do – Hạnh phúc</div>
+      <div style="font-style: italic; margin-top: 6px;">Xuân Hòa, #Hôm nay#</div>
+    </td>
+  </tr>
+</table>
+
+<div style="text-align: center; font-size: 15pt; font-weight: bold; margin-top: 10px; margin-bottom: 4px;">PHỤ LỤC HỢP ĐỒNG LAO ĐỘNG</div>
+<div style="text-align: center; font-size: 11.5pt; font-weight: bold; margin-bottom: 4px;">Số: #Số HĐ HQCV#/HĐLĐ-VSDN/#Năm#/#MSNV#</div>
+<div style="text-align: center; font-style: italic; font-size: 11pt; margin-bottom: 10px;">Căn cứ Hợp đồng Lao động số #Số hợp đồng# ký kết ngày #Ngày ký HĐ#</div>
+
+<div style="font-size: 11.5pt; font-weight: bold; margin-bottom: 6px;">Chúng tôi, gồm:</div>
+
+<table style="width: 100%; border-collapse: collapse; font-size: 11pt; margin-bottom: 10px;">
+  <tr>
+    <td style="width: 30%; padding: 3px 4px; font-weight: bold; vertical-align: top;">Bên A: Người sử dụng lao động (NSDLĐ)</td>
+    <td colspan="2" style="padding: 3px 4px; font-weight: bold;">: CÔNG TY CỔ PHẦN ĐẦU TƯ MẶT TRỜI VIỆT</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ</td>
+    <td colspan="2" style="padding: 3px 4px;">: Lô III-3A, Đường CN1, Nhóm CN III, KCN Tân Bình, phường Tây Thạnh, Tp.Hồ Chí Minh</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Mã số thuế</td>
+    <td colspan="2" style="padding: 3px 4px;">: 0305027542</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Đại diện</td>
+    <td colspan="2" style="padding: 3px 4px; font-weight: bold;">: ĐỖ ĐẶNG QUỐC HUY</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Chức vụ</td>
+    <td colspan="2" style="padding: 3px 4px;">: GIÁM ĐỐC ĐIỀU HÀNH CHI NHÁNH</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Số CCCD</td>
+    <td style="width: 34%; padding: 3px 4px;">: 075086021801</td>
+    <td style="padding: 3px 4px;">- Ngày cấp CCCD: 19/08/2022</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nơi cấp CCCD</td>
+    <td colspan="2" style="padding: 3px 4px;">: Cục CSQLHCVTTXH</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Địa chỉ thường trú</td>
+    <td colspan="2" style="padding: 3px 4px;">: Ấp Xuân Tâm 1, Xuân Hòa, TP.Đồng Nai</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Điện thoại</td>
+    <td colspan="2" style="padding: 3px 4px;">: 0938813801</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ làm việc</td>
+    <td colspan="2" style="padding: 3px 4px;">: Vietsun Đồng Nai – Chi Nhánh công ty Cổ Phần Đầu Tư Mặt Trời Việt- Tổ 1, Ấp Hòa Hưng, Xã Xuân Hòa, Tp.Đồng Nai.</td>
+  </tr>
+  <tr>
+    <td colspan="3" style="padding: 4px; font-style: italic;">Căn cứ Giấy ủy quyền số 01/GUQ-VĐ/2025 của Phó Tổng Giám Đốc Công ty Cổ Phần Đầu Tư Mặt Trời Việt, người đại diện pháp luật Chi nhánh Vietsun Đồng Nai.</td>
+  </tr>
+  <tr>
+    <td style="padding: 4px 4px 3px 4px; font-weight: bold;">Bên B: Người Lao động (NLĐ)</td>
+    <td style="padding: 4px 4px 3px 4px; font-weight: bold;">: #Họ và tên#</td>
+    <td style="padding: 4px 4px 3px 4px;">- Quốc tịch: Việt Nam</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Ngày sinh</td>
+    <td style="padding: 3px 4px;">: #Ngày sinh#</td>
+    <td style="padding: 3px 4px;">Tại: #Nơi sinh#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nghề nghiệp</td>
+    <td colspan="2" style="padding: 3px 4px;">: #Công việc#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px; vertical-align: top;">Địa chỉ thường trú</td>
+    <td colspan="2" style="padding: 3px 4px;">: #Địa chỉ thường trú#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Số CCCD/Số Hộ Chiếu</td>
+    <td style="padding: 3px 4px;">: #Số CCCD#</td>
+    <td style="padding: 3px 4px;">- Ngày cấp : #Ngày cấp CCCD#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Nơi cấp</td>
+    <td colspan="2" style="padding: 3px 4px;">: #Nơi cấp CCCD#</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Giấy phép LĐ số</td>
+    <td colspan="2" style="padding: 3px 4px;">: ... &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; - Ngày cấp : ... &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Nơi cấp : .....</td>
+  </tr>
+  <tr>
+    <td style="padding: 3px 4px;">Điện thoại</td>
+    <td colspan="2" style="padding: 3px 4px;">: #Số điện thoại#</td>
+  </tr>
+</table>
+
+<div style="font-size: 11pt; margin-bottom: 8px; text-align: justify;">
+  Sau khi bàn bạc và thống nhất, hai bên thỏa thuận ký kết Phụ lục hợp đồng lao động để bổ sung và cam kết thực hiện đúng các điều khoản sau đây:
+</div>
+
+<div style="font-size: 11pt; margin-bottom: 4px;"><strong>Điều 1. Quyền lợi bổ sung của NLĐ</strong></div>
+<div style="font-size: 11pt; margin-bottom: 4px;">
+  Mức thưởng hiệu quả vị trí công việc: <strong>#Mức tiền HQCV# đồng/tháng</strong>
+</div>
+<div style="font-size: 11pt; margin-bottom: 4px; font-style: italic; text-align: justify;">
+  (Mức thưởng bao gồm: Thuế thu nhập cá nhân và nghĩa vụ tài chính khác (nếu có) người lao động phải đóng theo quy định pháp luật).
+</div>
+<div style="font-size: 11pt; margin-bottom: 4px; text-align: justify; line-height: 1.45;">
+  Cách thức trả tiền thưởng: Căn cứ vào hiệu suất, hiệu quả công việc hàng tháng của Người lao động thực hiện và kết quả kinh doanh hàng tháng của đơn vị, phòng ban, Công ty theo quy chế độ công ty ban hành.
+</div>
+<div style="font-size: 11pt; margin-bottom: 10px;">
+  Thời gian hiệu lực: từ ngày <strong>#Ngày hiệu lực#</strong>
+</div>
+
+<div style="font-size: 11pt; margin-bottom: 4px;"><strong>Điều 2. Điều khoản thi hành</strong></div>
+<div style="font-size: 11pt; margin-bottom: 6px; text-align: justify; line-height: 1.45;">
+  Phụ lục này là một bộ phận của Hợp đồng lao động số <strong>#Số hợp đồng#</strong> ký kết ngày #Ngày ký HĐ# được làm thành 02 (hai) bản có giá trị ngang nhau, mỗi bên giữ một bản và có hiệu lực từ ngày ký đến khi có Phụ lục thay thế khác.
+</div>
+<div style="font-size: 11pt; margin-bottom: 14px; text-align: justify;">
+  Hai bên đã đọc Phụ lục Hợp đồng, đã hiểu và đồng ý tất cả các điều khoản ghi trong Phụ lục Hợp đồng và cùng ký vào Phụ lục Hợp đồng này.
+</div>
+
+<table style="width: 100%; border-collapse: collapse; text-align: center; font-size: 11pt; margin-top: 16px;">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <div style="font-weight: bold;">NGƯỜI SỬ DỤNG LAO ĐỘNG</div>
+      <div style="font-weight: bold; margin-bottom: 58px;">GIÁM ĐỐC CHI NHÁNH</div>
+      <div style="font-weight: bold;">ĐỖ ĐẶNG QUỐC HUY</div>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <div style="font-weight: bold;">NGƯỜI LAO ĐỘNG</div>
+      <div style="font-style: italic; font-size: 10.5pt; margin-bottom: 58px;">(Ký và ghi rõ họ tên)</div>
+      <div style="font-weight: bold;">#Họ và tên#</div>
+    </td>
+  </tr>
+</table>`,
+      'PHỤ LỤC HỢP ĐỒNG LAO ĐỘNG - THƯỞNG HIỆU QUẢ CÔNG VIỆC (HQCV)'
+    ]);
+
     const check = await pool.query('SELECT count(*) FROM document_templates WHERE id != $1', ['doc_tpl_qdnv']);
     if (parseInt(check.rows[0].count, 10) > 0) return;
 
