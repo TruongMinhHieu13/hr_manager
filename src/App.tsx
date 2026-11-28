@@ -32,6 +32,7 @@ import {
   UserMinus,
   FileCheck,
   ShieldCheck,
+  Briefcase,
 } from 'lucide-react';
 import { api } from './api';
 import {
@@ -71,6 +72,7 @@ import { CreatedContractsView } from './components/CreatedContractsView';
 import { ExpiringContractsView } from './components/ExpiringContractsView';
 import { BirthdayManagementView } from './components/BirthdayManagementView';
 import { ResignationManagementView } from './components/ResignationManagementView';
+import { AppointmentManagementView } from './components/AppointmentManagementView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { triggerBrowserCtrlP } from './utils/nativePrint';
 import { sortEmployeesNewestFirst, sortEmployeesByMsnv, isContractTerminated } from './utils/employeeUtils';
@@ -106,6 +108,12 @@ export default function App() {
           nextTab === 'created_contracts'
         ) {
           setIsContractGroupOpen(true);
+        } else if (
+          nextTab === 'appointments' ||
+          nextTab === 'dismissals' ||
+          nextTab === 'position_histories'
+        ) {
+          setIsAppointmentGroupOpen(true);
         } else if (['face_crop', 'designer', 'print', 'history'].includes(nextTab)) {
           setIsCardGroupOpen(true);
         }
@@ -175,6 +183,7 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isCardGroupOpen, setIsCardGroupOpen] = useState(true);
   const [isContractGroupOpen, setIsContractGroupOpen] = useState(true);
+  const [isAppointmentGroupOpen, setIsAppointmentGroupOpen] = useState(true);
   const [initialViewingEmployeeId, setInitialViewingEmployeeId] = useState<string | null>(null);
 
   // PostgreSQL synced state
@@ -966,6 +975,30 @@ export default function App() {
     },
   ];
 
+  const isAppointmentGroupActive = [
+    'appointments',
+    'dismissals',
+    'position_histories',
+  ].includes(activeTab);
+
+  const appointmentSubItems = [
+    {
+      id: 'appointments' as const,
+      label: 'Quyết định bổ nhiệm',
+      icon: Briefcase,
+    },
+    {
+      id: 'dismissals' as const,
+      label: 'Quyết định miễn nhiệm',
+      icon: UserMinus,
+    },
+    {
+      id: 'position_histories' as const,
+      label: 'Lịch sử chức vụ',
+      icon: History,
+    },
+  ];
+
   const isCardGroupActive = [
     'face_crop',
     'designer',
@@ -1394,6 +1427,104 @@ export default function App() {
               </div>
             )}
 
+            {/* 3.2. Mục lớn: Bổ nhiệm / Miễn nhiệm */}
+            {!isSidebarCollapsed ? (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAppointmentGroupOpen(!isAppointmentGroupOpen);
+                    if (!isAppointmentGroupActive) {
+                      setActiveTab('appointments');
+                    }
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 text-xs font-bold rounded-xl cursor-pointer transition-all ${
+                    isAppointmentGroupActive
+                      ? 'text-blue-900 bg-blue-50/80 border border-blue-200/60 shadow-2xs'
+                      : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                  title="Quản lý bổ nhiệm và miễn nhiệm"
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <Briefcase
+                      className={`w-4 h-4 shrink-0 ${
+                        isAppointmentGroupActive ? 'text-blue-700' : 'text-slate-500'
+                      }`}
+                    />
+                    <span className="truncate uppercase tracking-wide text-[11px]">
+                      Bổ nhiệm / Miễn nhiệm
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isAppointmentGroupOpen ? (
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </div>
+                </button>
+
+                {isAppointmentGroupOpen && (
+                  <div className="mt-1 ml-3.5 pl-3 border-l-2 border-slate-200 space-y-1 py-1">
+                    {appointmentSubItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveTab(item.id);
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
+                            isActive
+                              ? 'bg-blue-700 text-white shadow-xs font-bold'
+                              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                          }`}
+                          title={item.label}
+                        >
+                          <Icon
+                            className={`w-4 h-4 shrink-0 ${
+                              isActive ? 'text-white' : 'text-slate-500'
+                            }`}
+                          />
+                          <span className="truncate flex-1 text-left font-medium">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="pt-2 border-t border-slate-100 my-1 space-y-1">
+                {appointmentSubItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-center py-2.5 text-xs font-semibold rounded-xl cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-blue-700 text-white shadow-xs font-bold'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                      title={`Bổ nhiệm / Miễn nhiệm: ${item.label}`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {/* 3.3. Mục lớn: Danh sách nhân viên nghỉ việc */}
             <button
               type="button"
@@ -1801,6 +1932,22 @@ export default function App() {
             employees={employees}
             onNavigate={setActiveTab}
             onOpenPrintDialog={handleOpenPrintDialog}
+          />
+        )}
+
+        {(activeTab === 'appointments' ||
+          activeTab === 'dismissals' ||
+          activeTab === 'position_histories') && (
+          <AppointmentManagementView
+            activeSubMode={activeTab}
+            employees={employees}
+            divisions={divisions}
+            departments={departments}
+            subDepartments={subDepartments}
+            appSettings={settings}
+            userRole="admin"
+            onNavigate={setActiveTab}
+            onRefreshWorkspace={loadWorkspaceData}
           />
         )}
 

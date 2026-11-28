@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import apiRouter from './routes.js';
 import { initTables, pool } from './db.js';
+import { syncDueAppointmentDecisions } from './appointmentRoutes.js';
 
 dotenv.config();
 
@@ -79,6 +80,7 @@ async function startServer() {
   try {
     console.log('[Server] Đang kết nối PostgreSQL và khởi tạo bảng...');
     await initTables();
+    await syncDueAppointmentDecisions();
     console.log('[Server] Kết nối PostgreSQL thành công!');
 
     app.listen(PORT, '0.0.0.0', () => {

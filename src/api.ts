@@ -12,6 +12,9 @@ import {
   ResignationApplication,
   RenewContractPayload,
   ContractRecord,
+  AppointmentDecision,
+  PositionHistoryItem,
+  UserRole,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -221,5 +224,108 @@ export const api = {
 
   async restoreEmployeeStatus(e){let t=await(await fetch(`${API_BASE}/employees/restore-status`,{method:`POST`,headers:{"Content-Type":`application/json`},body:JSON.stringify(e)})).json();if(!t.success)throw Error(t.error||`Lỗi khôi phục trạng thái nhân viên`);return t},
 
-  async batchTerminateAndResign(e){let t=await(await fetch(`${API_BASE}/employees/batch-terminate-and-resign`,{method:`POST`,headers:{"Content-Type":`application/json`},body:JSON.stringify({items:e})})).json();if(!t.success)throw Error(t.error||`Lỗi xử lý import danh sách giảm`);return t;}
+  async batchTerminateAndResign(e){let t=await(await fetch(`${API_BASE}/employees/batch-terminate-and-resign`,{method:`POST`,headers:{"Content-Type":`application/json`},body:JSON.stringify({items:e})})).json();if(!t.success)throw Error(t.error||`Lỗi xử lý import danh sách giảm`);return t;},
+
+  // ===========================================================================
+  // BỔ NHIỆM / MIỄN NHIỆM & LỊCH SỬ CHỨC VỤ
+  // ===========================================================================
+  async getAppointments(params?: {
+    type?: 'bo_nhiem' | 'mien_nhiem';
+    search?: string;
+    position?: string;
+    department?: string;
+    status?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): Promise<AppointmentDecision[]> {
+    const qs = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (v) qs.set(k, v);
+      });
+    }
+    const res = await fetch(`${API_BASE}/appointments${qs.toString() ? `?${qs.toString()}` : ''}`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi tải danh sách quyết định');
+    }
+    return json.decisions || [];
+  },
+
+  async createAppointment(
+    payload: Record<string, unknown>,
+    userRole: UserRole = 'admin'
+  ): Promise<{ decision: AppointmentDecision; message: string }> {
+    const res = await fetch(`${API_BASE}/appointments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-role': userRole },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi tạo quyết định');
+    }
+    return { decision: json.decision, message: json.message };
+  },
+
+  async updateAppointment(
+    id: string,
+    payload: Record<string, unknown>,
+    userRole: UserRole = 'admin'
+  ): Promise<{ decision: AppointmentDecision; message: string }> {
+    const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-user-role': userRole },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi cập nhật quyết định');
+    }
+    return { decision: json.decision, message: json.message };
+  },
+
+  async deleteAppointment(id: string, userRole: UserRole = 'admin'): Promise<void> {
+    const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'x-user-role': userRole },
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi xóa quyết định');
+    }
+  },
+
+  async getPositionHistories(params?: { employeeId?: string; search?: string }): Promise<PositionHistoryItem[]> {
+    const qs = new URLSearchParams();
+    if (params?.employeeId) qs.set('employeeId', params.employeeId);
+    if (params?.search) qs.set('search', params.search);
+    const res = await fetch(`${API_BASE}/appointments/position-histories${qs.toString() ? `?${qs.toString()}` : ''}`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi tải lịch sử chức vụ');
+    }
+    return json.histories || [];
+  },
+
+  async getEmployeePositionHistory(employeeId: string): Promise<{
+    employee: { id: string; msnv: string; fullName: string; department: string; chucVu: string; ngayVao: string };
+    histories: PositionHistoryItem[];
+    decisions: AppointmentDecision[];
+  }> {
+    const res = await fetch(`${API_BASE}/appointments/by-employee/${encodeURIComponent(employeeId)}`);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || 'Lỗi tải quá trình công tác chức vụ');
+    }
+    return {
+      employee: json.employee,
+      histories: json.histories || [],
+      decisions: json.decisions || [],
+    };
+  },
+
+  getAppointmentAttachmentUrl(id: string, download = false): string {
+    return `${API_BASE}/appointments/${encodeURIComponent(id)}/attachment${download ? '?download=1' : ''}`;
+  },
 };

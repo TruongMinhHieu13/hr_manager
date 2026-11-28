@@ -5,12 +5,15 @@ import mammoth from 'mammoth';
 import { pool } from './db.js';
 import { convertDocxToFormattedHtml } from './docxParser.js';
 import workHistoryRouter from './workHistoryRoutes.js';
+import appointmentRouter, { syncDueAppointmentDecisions } from './appointmentRoutes.js';
 
 const router = express.Router();
 const WORKSPACE_ID = 'workspace_vietsun_dong_nai_v1';
 
 // Tích hợp router Quản lý Lịch sử làm việc & Tái tuyển dụng
 router.use(workHistoryRouter);
+// Tích hợp router Quản lý Bổ nhiệm & Miễn nhiệm
+router.use(appointmentRouter);
 
 // Chuẩn hóa tiếng Việt: xử lý triệt để lỗi tách dấu, lỗi VIQR, và chuẩn hóa Unicode sang dạng dựng sẵn NFC
 export function cleanVietnameseDiacritics(str) {
@@ -192,6 +195,7 @@ function extractEmployeeFields(emp) {
 // =============================================================================
 router.get('/workspace', async (req, res) => {
   try {
+    await syncDueAppointmentDecisions();
     const [empRes, divRes, deptRes, subDeptRes, parentDeptRes, tplRes, impRes, prtRes, setRes] = await Promise.all([
       pool.query(`
         SELECT ${EMPLOYEE_SELECT_FIELDS}

@@ -287,6 +287,9 @@ export type ActiveTab =
   | 'probation_contracts'
   | 'training_contracts'
   | 'created_contracts'
+  | 'appointments'
+  | 'dismissals'
+  | 'position_histories'
   | 'resignation'
   | 'document_templates'
   | 'face_crop'
@@ -295,6 +298,76 @@ export type ActiveTab =
   | 'history'
   | 'settings'
   | 'ai_rules';
+
+export type DecisionType = 'bo_nhiem' | 'mien_nhiem';
+export type DecisionStatus =
+  | 'pending_effective'
+  | 'effective'
+  | 'dismissed'
+  | 'expired'
+  | 'replaced'
+  | 'cancelled';
+
+export type UserRole = 'admin' | 'hr' | 'user';
+
+export interface AppointmentDecision {
+  id: string;
+  decisionType: DecisionType;
+  employeeId: string;
+  msnv: string;
+  fullName: string;
+  positionTitle: string;
+  divisionId?: string;
+  divisionName?: string;
+  departmentId?: string;
+  departmentName: string;
+  subDepartmentId?: string;
+  subDepartmentName?: string;
+  previousPosition?: string;
+  previousDepartment?: string;
+  decisionNumber: string;
+  signDate: string;
+  effectiveDate: string;
+  endDate?: string;
+  signerName: string;
+  reason?: string;
+  notes?: string;
+  attachmentName?: string;
+  attachmentPath?: string;
+  attachmentMime?: string;
+  attachmentSize?: number;
+  status: DecisionStatus;
+  appliedToEmployee: boolean;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PositionHistoryItem {
+  id: string;
+  employeeId: string;
+  msnv: string;
+  fullName: string;
+  positionTitle: string;
+  previousPosition?: string;
+  previousDepartment?: string;
+  divisionName?: string;
+  departmentName: string;
+  subDepartmentName?: string;
+  appointmentDecisionId?: string | null;
+  dismissalDecisionId?: string | null;
+  appointmentNumber?: string;
+  dismissalNumber?: string;
+  startDate: string;
+  endDate?: string;
+  termEndDate?: string;
+  isCurrent: boolean;
+  status: 'pending' | 'active' | 'replaced' | 'dismissed' | 'expired';
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export type ResignationType = 'tu_xin_nghi' | 'cong_ty_cho_thoi_viec' | 'bo_viec' | 'het_hop_dong' | 'rut_ho_so' | 'khac';
 export type RehireEligibility = 'eligible' | 'consider' | 'ineligible' | 'restricted';

@@ -14,6 +14,9 @@ export const TAB_TO_PATH: Record<ActiveTab, string> = {
   probation_contracts: '/probation-contracts',
   training_contracts: '/training-contracts',
   created_contracts: '/created-contracts',
+  appointments: '/appointments',
+  dismissals: '/dismissals',
+  position_histories: '/position-histories',
   resignation: '/resignation',
   document_templates: '/document-templates',
   face_crop: '/face-crop',
@@ -33,6 +36,9 @@ export const TAB_TITLES: Record<ActiveTab, string> = {
   probation_contracts: 'Hợp đồng thử việc (HĐTV) - VietSun HRM',
   training_contracts: 'Hợp đồng đào tạo nghề (HĐĐT) - VietSun HRM',
   created_contracts: 'Hợp đồng đã tạo - VietSun HRM',
+  appointments: 'Quyết định bổ nhiệm - VietSun HRM',
+  dismissals: 'Quyết định miễn nhiệm - VietSun HRM',
+  position_histories: 'Lịch sử chức vụ nhân sự - VietSun HRM',
   resignation: 'Nhân sự nghỉ việc - VietSun HRM',
   document_templates: 'Mẫu văn bản - VietSun HRM',
   face_crop: 'Cắt ảnh thẻ & Tách nền - VietSun HRM',
@@ -99,6 +105,18 @@ const SLUG_TO_TAB_MAP: Record<string, ActiveTab> = {
   'hop-dong-da-tao': 'created_contracts',
   hopdongdatao: 'created_contracts',
   contracts: 'created_contracts',
+
+  // Appointments & Dismissals
+  appointments: 'appointments',
+  'bo-nhiem': 'appointments',
+  bonhiem: 'appointments',
+  dismissals: 'dismissals',
+  'mien-nhiem': 'dismissals',
+  miennhiem: 'dismissals',
+  'position-histories': 'position_histories',
+  position_histories: 'position_histories',
+  'lich-su-chuc-vu': 'position_histories',
+  lichsuchucvu: 'position_histories',
 
   // Resignation & Work History
   resignation: 'resignation',
